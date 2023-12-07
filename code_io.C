@@ -127,7 +127,33 @@ void output(long ProcessId)
       UNLOCK(Global->CountLock);
    }
 
-   BARRIER(Global->Barrier,NPROC);
+   {
+        unsigned long   Error, Cycle;
+        long            Cancel, Temp;
+
+        Error = pthread_mutex_lock(&(Global->Barrier).mutex);
+        if (Error != 0) {
+                printf("Error while trying to get lock in barrier.\n");
+                exit(-1);
+        }
+
+        Cycle = (Global->Barrier).cycle;
+        if (++(Global->Barrier).counter != (NPROC)) {
+                pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, (int *) &Cancel);
+                while (Cycle == (Global->Barrier).cycle) {
+                        Error = pthread_cond_wait(&(Global->Barrier).cv, &(Global->Barrier).mutex);
+                        if (Error != 0) {
+                                break;
+                        }
+                }
+                pthread_setcancelstate(Cancel, (int *) &Temp);
+        } else {
+                (Global->Barrier).cycle = !(Global->Barrier).cycle;
+                (Global->Barrier).counter = 0;
+                Error = pthread_cond_broadcast(&(Global->Barrier).cv);
+        }
+        pthread_mutex_unlock(&(Global->Barrier).mutex);
+   }
 
    if (ProcessId==0) {
       nttot = Global->n2bcalc + Global->nbccalc;

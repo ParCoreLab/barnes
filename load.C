@@ -48,9 +48,63 @@ void maketree(long ProcessId)
 	 UNLOCK(Global->io_lock);
       }
    }
-   BARRIER(Global->Barrier,NPROC);
+
+   {
+        unsigned long   Error, Cycle;
+        long            Cancel, Temp;
+
+        Error = pthread_mutex_lock(&(Global->Barrier).mutex);
+        if (Error != 0) {
+                printf("Error while trying to get lock in barrier.\n");
+                exit(-1);
+        }
+
+        Cycle = (Global->Barrier).cycle;
+        if (++(Global->Barrier).counter != (NPROC)) {
+                pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, (int *) &Cancel);
+                while (Cycle == (Global->Barrier).cycle) {
+                        Error = pthread_cond_wait(&(Global->Barrier).cv, &(Global->Barrier).mutex);
+                        if (Error != 0) {
+                                break;
+                        }
+                }
+                pthread_setcancelstate(Cancel, (int *) &Temp);
+        } else {
+                (Global->Barrier).cycle = !(Global->Barrier).cycle;
+                (Global->Barrier).counter = 0;
+                Error = pthread_cond_broadcast(&(Global->Barrier).cv);
+        }
+        pthread_mutex_unlock(&(Global->Barrier).mutex);
+   }
+
    hackcofm(ProcessId );
-   BARRIER(Global->Barrier,NPROC);
+   {
+        unsigned long   Error, Cycle;
+        long            Cancel, Temp;
+   
+        Error = pthread_mutex_lock(&(Global->Barrier).mutex);
+        if (Error != 0) {
+                printf("Error while trying to get lock in barrier.\n");
+                exit(-1);
+        }
+
+        Cycle = (Global->Barrier).cycle;
+        if (++(Global->Barrier).counter != (NPROC)) {
+                pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, (int *) &Cancel);
+                while (Cycle == (Global->Barrier).cycle) {
+                        Error = pthread_cond_wait(&(Global->Barrier).cv, &(Global->Barrier).mutex);
+                        if (Error != 0) {
+                                break;  
+                        }
+                }
+                pthread_setcancelstate(Cancel, (int *) &Temp);
+        } else {
+                (Global->Barrier).cycle = !(Global->Barrier).cycle;
+                (Global->Barrier).counter = 0;
+                Error = pthread_cond_broadcast(&(Global->Barrier).cv);
+        }
+        pthread_mutex_unlock(&(Global->Barrier).mutex);
+   }
 }
 
 cellptr InitCell(cellptr parent, long ProcessId)
@@ -157,7 +211,7 @@ void printtree(nodeptr n)
 
 nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
 {
-   long l, xp[NDIM], xor[NDIM], flag;
+   long l, xp[NDIM], xor_arr[NDIM], flag;
    long i, j, root_level;
    bool valid_root;
    long kidIndex;
@@ -167,11 +221,11 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
    intcoord(xp, Pos(p));
    valid_root = TRUE;
    for (i = 0; i < NDIM; i++) {
-      xor[i] = xp[i] ^ Local[ProcessId].Root_Coords[i];
+      xor_arr[i] = xp[i] ^ Local[ProcessId].Root_Coords[i];
    }
    for (i = IMAX >> 1; i > Level(root); i >>= 1) {
       for (j = 0; j < NDIM; j++) {
-	 if (xor[j] & i) {
+	 if (xor_arr[j] & i) {
 	    valid_root = FALSE;
 	    break;
 	 }
@@ -189,7 +243,7 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
 	 valid_root = TRUE;
 	 for (i = IMAX >> 1; i > Level(root); i >>= 1) {
 	    for (j = 0; j < NDIM; j++) {
-	       if (xor[j] & i) {
+	       if (xor_arr[j] & i) {
 		  valid_root = FALSE;
 		  break;
 	       }

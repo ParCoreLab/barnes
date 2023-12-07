@@ -637,7 +637,34 @@ void stepsystem(long ProcessId)
 
 
     /* start at same time */
-    BARRIER(Global->Barrier,NPROC);
+
+    {
+    unsigned long   Error, Cycle;
+        long            Cancel, Temp;
+
+        Error = pthread_mutex_lock(&(Global->Barrier).mutex);
+        if (Error != 0) {
+                printf("Error while trying to get lock in barrier.\n");
+                exit(-1);
+        }
+
+        Cycle = (Global->Barrier).cycle;
+        if (++(Global->Barrier).counter != (NPROC)) {
+                pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, (int *) &Cancel);
+                while (Cycle == (Global->Barrier).cycle) {
+                        Error = pthread_cond_wait(&(Global->Barrier).cv, &(Global->Barrier).mutex);
+                        if (Error != 0) {
+                                break;
+                        }
+                }
+                pthread_setcancelstate(Cancel, (int *) &Temp);
+        } else {
+                (Global->Barrier).cycle = !(Global->Barrier).cycle;
+                (Global->Barrier).counter = 0;
+                Error = pthread_cond_broadcast(&(Global->Barrier).cv);
+        }
+        pthread_mutex_unlock(&(Global->Barrier).mutex);
+    }
 
     if ((ProcessId == 0) && (Local[ProcessId].nstep >= 2)) {
         CLOCK(treebuildstart);
@@ -662,7 +689,7 @@ void stepsystem(long ProcessId)
     }
 
     Local[ProcessId].mynbody = 0;
-    find_my_bodies(Global->G_root, 0, BRC_FUC, ProcessId );
+    find_my_bodies(reinterpret_cast<nodeptr>(Global->G_root), 0, BRC_FUC, ProcessId );
 
 /*     B*RRIER(Global->Barcom,NPROC); */
     if ((ProcessId == 0) && (Local[ProcessId].nstep >= 2)) {
@@ -714,7 +741,34 @@ void stepsystem(long ProcessId)
     /* bar needed to make sure that every process has computed its min */
     /* and max coordinates, and has accumulated them into the global   */
     /* min and max, before the new dimensions are computed	       */
-    BARRIER(Global->Barrier,NPROC);
+
+    {
+        unsigned long   Error, Cycle;
+        long            Cancel, Temp;
+
+        Error = pthread_mutex_lock(&(Global->Barrier).mutex);
+        if (Error != 0) {
+                printf("Error while trying to get lock in barrier.\n");
+                exit(-1);
+        }
+
+        Cycle = (Global->Barrier).cycle;
+        if (++(Global->Barrier).counter != (NPROC)) {
+                pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, (int *) &Cancel);
+                while (Cycle == (Global->Barrier).cycle) {
+                        Error = pthread_cond_wait(&(Global->Barrier).cv, &(Global->Barrier).mutex);
+                        if (Error != 0) {
+                                break;
+                        }
+                }
+                pthread_setcancelstate(Cancel, (int *) &Temp);
+        } else {
+                (Global->Barrier).cycle = !(Global->Barrier).cycle;
+                (Global->Barrier).counter = 0;
+                Error = pthread_cond_broadcast(&(Global->Barrier).cv);
+        }
+        pthread_mutex_unlock(&(Global->Barrier).mutex);
+    }
 
     if ((ProcessId == 0) && (Local[ProcessId].nstep >= 2)) {
         CLOCK(trackend);
@@ -786,7 +840,35 @@ void find_my_initial_bodies(bodyptr btab, long nbody, long ProcessId)
   for (i=0; i < Local[ProcessId].mynbody; i++) {
      Local[ProcessId].mybodytab[i] = &(btab[offset+i]);
   }
-  BARRIER(Global->Barrier,NPROC);
+
+  {
+        unsigned long   Error, Cycle;
+        long            Cancel, Temp;
+
+        Error = pthread_mutex_lock(&(Global->Barrier).mutex);
+        if (Error != 0) {
+                printf("Error while trying to get lock in barrier.\n");
+                exit(-1);
+        }
+
+        Cycle = (Global->Barrier).cycle;
+        if (++(Global->Barrier).counter != (NPROC)) {
+                pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, (int *) &Cancel);
+                while (Cycle == (Global->Barrier).cycle) {
+                        Error = pthread_cond_wait(&(Global->Barrier).cv, &(Global->Barrier).mutex);
+                        if (Error != 0) {
+                                break;
+                        }
+                }
+                pthread_setcancelstate(Cancel, (int *) &Temp);
+        } else {
+                (Global->Barrier).cycle = !(Global->Barrier).cycle;
+                (Global->Barrier).counter = 0;
+                Error = pthread_cond_broadcast(&(Global->Barrier).cv);
+        }
+        pthread_mutex_unlock(&(Global->Barrier).mutex);
+  } 
+
 }
 
 

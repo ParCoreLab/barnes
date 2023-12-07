@@ -21,6 +21,7 @@ EXTERN_ENV
 #define global extern
 
 #include "stdinc.h"
+//#include <stdio.h>
 
 local string *defaults = NULL;        /* vector of "name=value" strings */
 
@@ -49,10 +50,15 @@ string getparam(string name)
    if (i < 0)
       error("getparam: %s unknown\n", name);
    def = extrvalue(defaults[i]);
-   gets(buf);
+   fgets(buf, 128, stdin);
+   size_t n = strlen(buf);
+
+   if (n > 0 && buf[n - 1] == '\n') {
+        buf[n - 1] = '\0';
+   } 
    leng = strlen(buf) + 1;
    if (leng > 1) {
-      return (strcpy(malloc(leng), buf));
+      return (strcpy(static_cast<char*>(malloc(leng)), buf));
    }
    else {
       return (def);
