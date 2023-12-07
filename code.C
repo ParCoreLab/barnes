@@ -384,7 +384,7 @@ void tab_init()
  */
 void SlaveStart()
 {
-   printf("SlaveStart begins\n");
+   //printf("SlaveStart begins\n");
    long ProcessId;
 
    /* Get unique ProcessId */
@@ -445,7 +445,7 @@ void SlaveStart()
 //      printtree(Global->G_root);
 //      printf("Going to next step!!!\n");
    }
-   printf("SlaveStart ends\n");
+   //printf("SlaveStart ends\n");
 }
 
 
