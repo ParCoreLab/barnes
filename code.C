@@ -67,9 +67,15 @@ Command line options:
 
 MAIN_ENV
 
+#include <chrono>
+#include <cassert>
+#include <iostream>
+#include <vector>
+
 #define global  /* nada */
 
 #include "stdinc.h"
+#include "cha.h"
 
 string defv[] = {                 /* DEFAULT PARAMETER VALUES              */
     /* file names for input/output                                         */
@@ -128,6 +134,8 @@ string defv[] = {                 /* DEFAULT PARAMETER VALUES              */
 #define FDC_BRC 29
 #define FDA_BDC 30
 #define FDA_BLA 31
+
+#define CACHELINE_SIZE 64
 
 static long Child_Sequence[NUM_DIRECTIONS][NSUB] =
 {
@@ -264,9 +272,29 @@ int main (int argc, string argv[])
    Global->forcecalctime = 0;
    Global->current_id = 0;
 
+   using namespace std;
+   using std::chrono::duration;
+   using std::chrono::duration_cast;
+   using std::chrono::high_resolution_clock;
+   using std::chrono::milliseconds;
+
    CLOCK(Global->computestart);
 
    printf("COMPUTESTART  = %12lu\n",Global->computestart);
+
+    std::cout << "base cores: ";
+    std::vector<int> base_assigned_cores;
+    for (int i = 0; i < getCoreCount(); ++i)
+    {
+        if (i % 2 == 0)
+        {
+            base_assigned_cores.push_back(i);
+            std::cout << i << ' ';
+            // this is to bind cores in socket-0. all cores are even numbered in this socket.
+        }
+    }
+    std::cout << std::endl;
+    assert(base_assigned_cores.size() == 28); 
 
    CREATE(SlaveStart, NPROC);
 
@@ -302,6 +330,11 @@ void ANLinit()
 
    Global = (struct GlobalMemory *) G_MALLOC(sizeof(struct GlobalMemory));
    if (Global==NULL) error("No initialization for Global\n");
+
+   const int ret = posix_memalign((void **)(&Global), CACHELINE_SIZE, sizeof(struct GlobalMemory));
+   assert(ret == 0);
+
+   if (Global==NULL) error("No initialization for Global\n"); 
 
    BARINIT(Global->Barrier, NPROC);
 
