@@ -58,6 +58,11 @@ define(BARINIT, `{
 	($1).cycle = 0;
 }')
 
+define(BARINIT_NO_INIT, `{
+        ($1).counter = 0;
+        ($1).cycle = 0;
+}')
+
 define(BAREXCLUDE, `{;}')
 
 define(BARINCLUDE, `{;}')

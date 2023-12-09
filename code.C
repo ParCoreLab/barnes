@@ -552,8 +552,21 @@ int main (int argc, string argv[])
     const auto cha_aware_end = high_resolution_clock::now();
     const auto elapsed_cha_aware = duration_cast<milliseconds>(cha_aware_end - cha_aware_start).count();
     std::cout << "Ended cha aware BM. elapsed time: " << elapsed_cha_aware << "ms" << std::endl;
-//#endif
+#endif
     // base BM.
+
+    //initparam(defv); // modify initparam to read input from stdin only once
+    startrun_repeated(); // create another version of this function that reuses loaded data
+    initoutput(); // no need for modification, can be repeated
+    //tab_init(); // no need to be recalled in the next iteration of barnes computation
+
+    // the following 5 initializations need to be repeated before each iteration of barnes computation
+    Global->tracktime = 0;
+    Global->partitiontime = 0;
+    Global->treebuildtime = 0;
+    Global->forcecalctime = 0;
+    Global->current_id = 0;
+
     std::cout << "Now running base BM" << std::endl;
     const auto base_start = high_resolution_clock::now(); 
 
@@ -568,7 +581,7 @@ int main (int argc, string argv[])
     std::cout << "Ended base BM. elapsed time: " << elapsed_base << "ms" << std::endl;
   
     //std::cout << "latency improv percentage: " << ((elapsed_base - elapsed_cha_aware) / static_cast<double>(elapsed_base)) * 100 << std::endl;
-#endif
+//#endif
 
     MAIN_END;
 }
@@ -597,6 +610,32 @@ void ANLinit()
 
    // no need to be added in the variant of ANLinit
    LOCKINIT(Global->io_lock);
+}
+
+/*
+ * ANLINIT : modified
+ */
+void ANLinit_modified()
+{
+   MAIN_INITENV(,70000000,);
+   /* Allocate global, shared memory */
+
+   //Global = (struct GlobalMemory *) G_MALLOC(sizeof(struct GlobalMemory));
+   //if (Global==NULL) error("No initialization for Global\n");
+
+   //const int ret = posix_memalign((void **)(&Global), CACHELINE_SIZE, sizeof(struct GlobalMemory));
+   //assert(ret == 0);
+
+   //if (Global==NULL) error("No initialization for Global\n");
+
+   // create a variant of barinit that only zeroes out counter and cycle
+   BARINIT_NO_INIT(Global->Barrier, NPROC);
+
+   // no need to be added in the variant of ANLinit
+   //LOCKINIT(Global->CountLock);
+
+   // no need to be added in the variant of ANLinit
+   //LOCKINIT(Global->io_lock);
 }
 
 /*
@@ -808,6 +847,40 @@ void startrun()
    Local[0].tout = Local[0].tnow + dtout;
 }
 
+void startrun_repeated()
+{
+   long seed;
+   infile = getparam("in"); // alter getparam to read from the data structure containing data from stdin
+   if (*infile != '\0'/*NULL*/) {
+      inputdata();
+   }
+   else {
+      nbody = getiparam("nbody");
+      if (nbody < 1) {
+	 error("startrun: absurd nbody\n");
+      }
+      seed = getiparam("seed");
+   }
+   outfile = getparam("out");
+   dtime = getdparam("dtime");
+   dthf = 0.5 * dtime;
+   eps = getdparam("eps");
+   epssq = eps*eps;
+   tol = getdparam("tol");
+   tolsq = tol*tol;
+   fcells = getdparam("fcells");
+   fleaves = getdparam("fleaves");
+   tstop = getdparam("tstop");
+   dtout = getdparam("dtout");
+   NPROC = getiparam("NPROC");
+   Local[0].nstep = 0;
+   pranset(seed); // no need for modification, can be repeated
+   testdata_no_alloc(); // create another variant of this function that does not initialize bodytab and repeat it
+   ANLinit_modified(); // create another variant of ANLinit that only calls the variant of barinit
+   setbound(); // no need for modification, can be repeated
+   Local[0].tout = Local[0].tnow + dtout;
+}
+
 /*
  * TESTDATA: generate Plummer model initial conditions for test runs,
  * scaled to units such that M = -4E = G = 1 (Henon, Hegge, etc).
@@ -829,6 +902,79 @@ void testdata()
    headline = "Hack code: Plummer model";
    Local[0].tnow = 0.0;
    bodytab = (bodyptr) G_MALLOC(nbody * sizeof(body));
+   if (bodytab == NULL) {
+      error("testdata: not enough memory\n");
+   }
+   rsc = 9 * PI / 16;
+   vsc = sqrt(1.0 / rsc);
+
+   CLRV(cmr);
+   CLRV(cmv);
+
+   halfnbody = nbody / 2;
+   if (nbody % 2 != 0) halfnbody++;
+   for (p = bodytab; p < bodytab+halfnbody; p++) {
+      Type(p) = BODY;
+      Mass(p) = 1.0 / nbody;
+      Cost(p) = 1;
+
+      r = 1 / sqrt(pow(xrand(0.0, MFRAC), -2.0/3.0) - 1);
+      /*   reject radii greater than 10 */
+      while (r > 9.0) {
+	 rejects++;
+	 r = 1 / sqrt(pow(xrand(0.0, MFRAC), -2.0/3.0) - 1);
+      }
+      pickshell(Pos(p), rsc * r);
+      ADDV(cmr, cmr, Pos(p));
+      do {
+	 x = xrand(0.0, 1.0);
+	 y = xrand(0.0, 0.1);
+
+      } while (y > x*x * pow(1 - x*x, 3.5));
+
+      v = sqrt(2.0) * x / pow(1 + r*r, 0.25);
+      pickshell(Vel(p), vsc * v);
+      ADDV(cmv, cmv, Vel(p));
+   }
+
+   offset = 4.0;
+
+   for (p = bodytab + halfnbody; p < bodytab+nbody; p++) {
+      Type(p) = BODY;
+      Mass(p) = 1.0 / nbody;
+      Cost(p) = 1;
+
+      cp = p - halfnbody;
+      for (i = 0; i < NDIM; i++){
+	 Pos(p)[i] = Pos(cp)[i] + offset;
+	 Vel(p)[i] = Vel(cp)[i];
+      }
+      ADDV(cmr, cmr, Pos(p));
+      ADDV(cmv, cmv, Vel(p));
+   }
+
+   DIVVS(cmr, cmr, (real) nbody);
+   DIVVS(cmv, cmv, (real) nbody);
+
+   for (p = bodytab; p < bodytab+nbody; p++) {
+      SUBV(Pos(p), Pos(p), cmr);
+      SUBV(Vel(p), Vel(p), cmv);
+   }
+}
+
+void testdata_no_alloc()
+{
+   real rsc, vsc, r, v, x, y;
+   vector cmr, cmv;
+   register bodyptr p;
+   long rejects = 0;
+   long halfnbody, i;
+   float offset;
+   register bodyptr cp;
+
+   headline = "Hack code: Plummer model";
+   Local[0].tnow = 0.0;
+   //bodytab = (bodyptr) G_MALLOC(nbody * sizeof(body));
    if (bodytab == NULL) {
       error("testdata: not enough memory\n");
    }
