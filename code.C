@@ -777,7 +777,6 @@ void SlaveStart(void* data)
 void startrun()
 {
    long seed;
-
    infile = getparam("in"); // alter getparam to read from the data structure containing data from stdin
    if (*infile != '\0'/*NULL*/) {
       inputdata();
@@ -789,7 +788,6 @@ void startrun()
       }
       seed = getiparam("seed");
    }
-
    outfile = getparam("out");
    dtime = getdparam("dtime");
    dthf = 0.5 * dtime;

@@ -18,12 +18,14 @@
  * GETPARAM.C:
  */
 EXTERN_ENV
+#include <iostream>
 #define global extern
 
 #include "stdinc.h"
 //#include <stdio.h>
 
 local string *defaults = NULL;        /* vector of "name=value" strings */
+local string inputarray[12];
 
 /*
  * INITPARAM: ignore arg vector, remember defaults.
@@ -31,7 +33,23 @@ local string *defaults = NULL;        /* vector of "name=value" strings */
 
 void initparam(string *defv)
 {
+   char buf[128];
+   long leng;
    defaults = defv;
+   for(int i = 0; i < 12; i++) {
+	fgets(buf, 128, stdin);
+	size_t n = strlen(buf);
+	if (n > 0 && buf[n - 1] == '\n') {
+        	buf[n - 1] = '\0';
+   	}
+	leng = strlen(buf) + 1;
+	if(leng > 1) {
+		inputarray[i] = strcpy(static_cast<char*>(malloc(leng)), buf);
+	} else {
+		inputarray[i] = strcpy(static_cast<char*>(malloc(1)), "");
+	}
+	memset( (void *) buf, '\0', 128);
+   }
 }
 
 /*
@@ -40,15 +58,24 @@ void initparam(string *defv)
 
 string getparam(string name)
 {
-   long i, leng;
+   long i, leng = 0;
    string def;
    char buf[128];
 
-   if (defaults == NULL)
-      error("getparam: called before initparam\n");
+   //if (defaults == NULL)
+      //error("getparam: called before initparam\n");
    i = scanbind(defaults, name);
    if (i < 0)
       error("getparam: %s unknown\n", name);
+   def = extrvalue(defaults[i]);
+   //if(inputarray[i] != NULL)
+   leng = strlen(inputarray[i]) + 1;
+   if (leng > 1) {
+   	return inputarray[i];
+   } else {
+	return (def);
+   }
+#if 0
    def = extrvalue(defaults[i]);
    fgets(buf, 128, stdin);
    size_t n = strlen(buf);
@@ -63,6 +90,7 @@ string getparam(string name)
    else {
       return (def);
    }
+#endif
 }
 
 /*
