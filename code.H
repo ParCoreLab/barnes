@@ -135,7 +135,7 @@ struct local_memory {
 };
 global struct local_memory Local[MAX_PROC];
 
-void SlaveStart(void);
+void SlaveStart(void* data);
 void stepsystem(long ProcessId);
 void ComputeForces(long ProcessId);
 void Help(void);

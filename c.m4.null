@@ -175,15 +175,16 @@ define(WAIT_FOR_END, `{
 define(CREATE, `{
 	long	i, Error;
 
-	for (i = 0; i < ($2) - 1; i++) {
-		Error = pthread_create(&PThreadTable[i], NULL, (void * (*)(void *))($1), NULL);
+	for (i = 0; i < ($3) - 1; i++) {
+		Error = pthread_create(&PThreadTable[i], NULL, (void * (*)(void *))($1), $2);
 		if (Error != 0) {
 			printf("Error in pthread_create().\n");
 			exit(-1);
 		}
 	}
 
-	$1();
+	$1($2);
+	Global->current_id = 0;
 }')
 
 define(MAIN_INITENV, `{;}')

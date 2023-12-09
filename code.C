@@ -71,11 +71,18 @@ MAIN_ENV
 #include <cassert>
 #include <iostream>
 #include <vector>
+#include <map>
+#include <set>
+#include <bits/stdc++.h>
+#include <unordered_map>
 
 #define global  /* nada */
 
 #include "stdinc.h"
 #include "cha.h"
+#include "topology.h"
+
+std::map<long, std::multiset<double *>> threadid_addresses_map;
 
 string defv[] = {                 /* DEFAULT PARAMETER VALUES              */
     /* file names for input/output                                         */
@@ -243,6 +250,74 @@ static long Direction_Sequence[NUM_DIRECTIONS][NSUB] =
  /* FDA_BLA */
 };
 
+int findCha(const double* val)
+{
+  // this part is changed wrt fluidanimate.
+    return findCHAByHashing(reinterpret_cast<uintptr_t>(val)); // AYDIN: this is not &val, right?
+}
+
+int getMostAccessedCHA(int tid1,
+                       int tid2,
+                       std::multiset<std::tuple<int, int, int, int>, std::greater<>> ranked_cha_access_count_per_pair,
+                       Topology topo)
+{
+    int max = 0;
+    std::vector<int> considered_chas;
+    std::map<int, bool> considered_chas_flag;
+
+    auto it = ranked_cha_access_count_per_pair.begin();
+    while (it != ranked_cha_access_count_per_pair.end())
+    {
+        // std::pair<int, int> tid_pair(std::get<2>(*it), std::get<3>(*it));
+        if ((std::get<2>(*it) == tid1 && std::get<3>(*it) == tid2) || (std::get<3>(*it) == tid1 && std::get<2>(*it) == tid2))
+        {
+            // SPDLOG_INFO("returning {}", std::get<1>(*it));
+            max = std::get<0>(*it);
+            considered_chas_flag[std::get<1>(*it)] = true;
+            considered_chas.push_back(std::get<1>(*it));
+            break;
+        }
+        it++;
+    }
+
+    // SPDLOG_INFO("communication between threads {} and {} uses the following chas the most", std::get<1>(*it), std::get<0>(*it), max);
+    while (it != ranked_cha_access_count_per_pair.end())
+    {
+        // std::pair<int, int> tid_pair(std::get<2>(*it), std::get<3>(*it));
+        if ((std::get<2>(*it) == tid1 && std::get<3>(*it) == tid2) || (std::get<3>(*it) == tid1 && std::get<2>(*it) == tid2))                {
+            // SPDLOG_INFO("returning {}", std::get<1>(*it));
+            if (considered_chas_flag[std::get<1>(*it)] == false && std::get<0>(*it) > (0.9 * max))
+            {
+                // SPDLOG_INFO("cha {}, access count: {}, max: {}", std::get<1>(*it), std::get<0>(*it), max);
+                considered_chas_flag[std::get<1>(*it)] = true;
+                considered_chas.push_back(std::get<1>(*it));
+            }
+        }
+        it++;
+    }
+
+    int x_total = 0;
+    int y_total = 0;
+    int cha_count = 0;
+    // SPDLOG_INFO("communication between threads {} and {} involves the following CHAs:");
+    for (auto it1 : considered_chas)
+    {
+        auto tile = topo.getTile(it1);
+        x_total += tile.x;
+        y_total += tile.y;
+        cha_count++;
+        // SPDLOG_INFO("cha {}, x: {}, y: {}", tile.cha, tile.x, tile.y);
+    }
+
+    assert(cha_count != 0);
+    int x_coord = x_total / cha_count;
+    int y_coord = y_total / cha_count;
+    auto tile = topo.getTile(x_coord, y_coord);
+    // SPDLOG_INFO("the center of gravity is cha {}, x: {}, y: {}", tile.cha, tile.x, tile.y);
+    // approximate the algorithm now
+    return tile.cha;
+}
+
 int main (int argc, string argv[])
 {
    long c;
@@ -261,11 +336,12 @@ int main (int argc, string argv[])
    }
 
    Global = NULL;
-   initparam(defv);
-   startrun();
-   initoutput();
-   tab_init();
+   initparam(defv); // modify initparam to read input from stdin only once
+   startrun(); // create another version of this function that reuses loaded data
+   initoutput(); // no need for modification, can be repeated
+   tab_init(); // no need to be recalled in the next iteration of barnes computation
 
+   // the following 5 initializations need to be repeated before each iteration of barnes computation
    Global->tracktime = 0;
    Global->partitiontime = 0;
    Global->treebuildtime = 0;
@@ -296,7 +372,7 @@ int main (int argc, string argv[])
     std::cout << std::endl;
     assert(base_assigned_cores.size() == 28); 
 
-   CREATE(SlaveStart, NPROC);
+   CREATE(SlaveStart, static_cast<void*>(base_assigned_cores.data()), NPROC);
 
    WAIT_FOR_END(NPROC);
 
@@ -317,7 +393,184 @@ int main (int argc, string argv[])
 	  ((float)(Global->tracktime-Global->partitiontime-
 		   Global->treebuildtime-Global->forcecalctime))/
 	  Global->tracktime);
-   MAIN_END;
+   
+   // preprocessing begins here
+#if 0
+   std::cout << "Starting preprocesing algo..." << std::endl;
+   const auto algo_start = high_resolution_clock::now();
+
+   assert(NPROC > 1);  // below algo depends on this. we will find thread pairs.
+   auto head = threadid_addresses_map.begin();
+   auto tail = std::next(threadid_addresses_map.begin());
+
+   std::multiset<tuple<int, int, int>, greater<>> total_comm_count_t1_t2;
+   std::multiset<tuple<int, int, int, int>, greater<>> total_cha_freq_count_t1_t2;
+
+   // map<pair<int, int>, multiset<Cell *>> pairing_addresses;
+   while (head != threadid_addresses_map.end()) {
+        const auto orig_tail = tail;
+        while (tail != threadid_addresses_map.end()) {
+            const int t1 = head->first;
+            const int t2 = tail->first;   
+	    // cout << "head: " << t1 << ", tail: " << t2 << endl;
+
+            const multiset<double *> t1_addresses = head->second;
+            const multiset<double *> t2_addresses = tail->second;
+
+	    std::multiset<double *> common_addresses;
+            std::set_intersection(t1_addresses.begin(), t1_addresses.end(), t2_addresses.begin(), t2_addresses.end(),
+                                  std::inserter(common_addresses, common_addresses.begin()));
+
+	    std::unordered_map<int, int> cha_freq_map;
+	    
+	    // this part is changed wrt fluidanimate.
+            for(const double* common_addr : common_addresses) {
+              ++cha_freq_map[findCha(common_addr)];
+            }
+            // this part is changed wrt fluidanimate.
+
+	    for(const auto& [cha, freq] : cha_freq_map) {
+                total_cha_freq_count_t1_t2.insert({freq, cha, t1, t2});
+            }
+
+	    total_comm_count_t1_t2.insert({common_addresses.size(), t1, t2});
+	    // pairing_addresses[{t1, t2}] = common_addresses; // pairing is not used at the moment. here just for clarity.
+	    
+	    ++tail;
+	}
+	tail = std::next(orig_tail);
+	++head;
+   }    
+
+   int mapped_thread_count = 0;
+   auto it = total_cha_freq_count_t1_t2.begin();
+   auto it1 = total_comm_count_t1_t2.begin();
+   std::vector<int> thread_to_core(NPROC, -1);
+
+   auto topo = Topology(cha_core_map, CAPID6);
+   std::vector<Tile> mapped_tiles;
+
+   // SPDLOG_TRACE("~~~~~~~~~~~~~~~~");
+    //  fprintf(stderr, "before thread mapping creation\n");
+    
+    // start
+    // it = ranked_cha_access_count_per_pair.begin();
+    while (mapped_tiles.size() < NPROC &&
+           /*it != ranked_cha_access_count_per_pair.end()*/ it1 != total_comm_count_t1_t2.end()) {
+        // std::pair<int, int> tid_pair(std::get<2>(*it), std::get<3>(*it));
+        std::pair<int, int> tid_pair(std::get<1>(*it1), std::get<2>(*it1));
+        if (thread_to_core[tid_pair.first] == -1 && thread_to_core[tid_pair.second] == -1) {
+            // SPDLOG_TRACE("cha with max access: {}", std::get<1>(*it));
+            int cha_id = getMostAccessedCHA(tid_pair.first, tid_pair.second, total_cha_freq_count_t1_t2, topo);
+            if (cha_id == -1) {
+                // SPDLOG_INFO("error: cha is -1");
+                it1++;
+                continue;
+            }
+            // auto tile = topo.getTile(std::get<1>(*it));
+            auto tile = topo.getTile(cha_id);
+            // SPDLOG_TRACE("cha {}, is colocated with core {}", cha_id, tile.core);
+            // if (thread_to_core[tid_pair.first] == -1)
+            {
+                // SPDLOG_INFO("fetching a tile closest to tile with cha {} and core {}, cha supposed to be {}",
+                // tile.cha, tile.core, std::get<1>(*it));
+                auto closest_tile = topo.getClosestTile(tile, mapped_tiles);
+                // auto closest_tile = topo.getClosestTilewithThreshold(tile, mapped_tiles);
+                // SPDLOG_TRACE("* closest _available_ core to cha {} is: {}", tile.cha, closest_tile.core);
+                mapped_tiles.push_back(closest_tile);
+                thread_to_core[tid_pair.first] = closest_tile.core;
+                // SPDLOG_TRACE("assigned thread with id {} to core {}", tid_pair.first, closest_tile.core);
+            }
+#if 0
+            else
+            {
+                SPDLOG_TRACE("--> Already assigned thread with id {} to core {}, skipping it.", tid_pair.first, thread_to_core[tid_pair.first]);
+            }
+#endif
+
+            // if (thread_to_core[tid_pair.second] == -1)
+            {
+                // SPDLOG_INFO("fetching a tile closest to tile with cha {} and core {}, cha supposed to be {}",
+                // tile.cha, tile.core, std::get<1>(*it));
+                auto closest_tile = topo.getClosestTile(tile, mapped_tiles);
+                // auto closest_tile = topo.getClosestTilewithThreshold(tile, mapped_tiles);
+                // SPDLOG_TRACE("# closest _available_ core to cha {} is: {}", tile.cha, closest_tile.core);
+                mapped_tiles.push_back(closest_tile);
+                thread_to_core[tid_pair.second] = closest_tile.core;
+                // SPDLOG_TRACE("assigned thread with id {} to core {}", tid_pair.second, closest_tile.core);
+            }
+
+#if 0
+            else
+            {
+                SPDLOG_TRACE("--> Already assigned thread with id {} to core {}, skipping it.", tid_pair.second, thread_to_core[tid_pair.second]);
+            }
+#endif
+        }
+        //#if 0
+        else if (thread_to_core[tid_pair.first] == -1) {
+            auto tile = topo.getTileByCore(thread_to_core[tid_pair.second]);
+            auto closest_tile = topo.getClosestTile(tile, mapped_tiles);
+            mapped_tiles.push_back(closest_tile);
+            thread_to_core[tid_pair.first] = closest_tile.core;
+        } else if (thread_to_core[tid_pair.second] == -1) {
+            auto tile = topo.getTileByCore(thread_to_core[tid_pair.first]);
+            auto closest_tile = topo.getClosestTile(tile, mapped_tiles);
+            mapped_tiles.push_back(closest_tile);
+            thread_to_core[tid_pair.second] = closest_tile.core;
+        }
+        //#endif
+
+        it1++;
+    }
+    // end
+
+
+    const auto algo_end = high_resolution_clock::now();
+    std::cout << "Ended preprocesing algo. elapsed time: " << duration_cast<milliseconds>(algo_end - algo_start).count() << "ms" << std::endl;
+
+    int ii = 0;
+    for (auto ptr : thread_to_core) {
+        std::cout << "thread " << ii << " is mapped to core " << ptr << std::endl;
+        // SPDLOG_INFO("thread {} is mapped to core {} ", ii, ptr);
+        ii++;
+    }
+
+    assert(thread_to_core.size() == NPROC);
+    topo.printTopology(); 
+//#if 0
+    // cha aware BM.
+    std::cout << "Now running cha aware BM" << std::endl;
+    //assert(__threads__<__MAX_THREADS__);
+    const auto cha_aware_start = high_resolution_clock::now();
+
+    CREATE(SlaveStart, static_cast<void*>(thread_to_core.data()), NPROC);
+
+    WAIT_FOR_END(NPROC); 
+    // std::cout << "AFTER JOIN. ended cha aware bm" << std::endl;
+
+    const auto cha_aware_end = high_resolution_clock::now();
+    const auto elapsed_cha_aware = duration_cast<milliseconds>(cha_aware_end - cha_aware_start).count();
+    std::cout << "Ended cha aware BM. elapsed time: " << elapsed_cha_aware << "ms" << std::endl;
+//#endif
+    // base BM.
+    std::cout << "Now running base BM" << std::endl;
+    const auto base_start = high_resolution_clock::now(); 
+
+    CREATE(SlaveStart, static_cast<void*>(base_assigned_cores.data()), NPROC);
+
+    WAIT_FOR_END(NPROC);
+
+    // std::cout << "AFTER JOIN. ended base bm" << std::endl;
+
+    const auto base_end = high_resolution_clock::now();
+    const auto elapsed_base = duration_cast<milliseconds>(base_end - base_start).count();
+    std::cout << "Ended base BM. elapsed time: " << elapsed_base << "ms" << std::endl;
+  
+    //std::cout << "latency improv percentage: " << ((elapsed_base - elapsed_cha_aware) / static_cast<double>(elapsed_base)) * 100 << std::endl;
+#endif
+
+    MAIN_END;
 }
 
 /*
@@ -328,17 +581,21 @@ void ANLinit()
    MAIN_INITENV(,70000000,);
    /* Allocate global, shared memory */
 
-   Global = (struct GlobalMemory *) G_MALLOC(sizeof(struct GlobalMemory));
-   if (Global==NULL) error("No initialization for Global\n");
+   //Global = (struct GlobalMemory *) G_MALLOC(sizeof(struct GlobalMemory));
+   //if (Global==NULL) error("No initialization for Global\n");
 
    const int ret = posix_memalign((void **)(&Global), CACHELINE_SIZE, sizeof(struct GlobalMemory));
    assert(ret == 0);
 
    if (Global==NULL) error("No initialization for Global\n"); 
 
-   BARINIT(Global->Barrier, NPROC);
+   // create a variant of barinit that only zeroes out counter and cycle
+   BARINIT(Global->Barrier, NPROC); 
 
-   LOCKINIT(Global->CountLock);
+   // no need to be added in the variant of ANLinit
+   LOCKINIT(Global->CountLock); 
+
+   // no need to be added in the variant of ANLinit
    LOCKINIT(Global->io_lock);
 }
 
@@ -412,19 +669,49 @@ void tab_init()
    ALOCKINIT(CellLock->CL,MAXLOCK);
 }
 
+void stick_this_thread_to_core(int core_id) {
+    int num_cores = sysconf(_SC_NPROCESSORS_ONLN);
+    if (core_id < 0 || core_id >= num_cores) {
+        std::cerr << "error binding thread to core: " << core_id << '\n';
+        // SPDLOG_ERROR("error binding thread to core {}!", core_id);
+        return;
+    }
+
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(core_id, &cpuset);
+
+    pthread_t current_thread = pthread_self();
+
+    int res = pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
+
+    if (res == 0) {
+        // std::cout << "thread bound to core " << core_id << std::endl;
+        //        SPDLOG_INFO("Thread bound to core {} successfully.", core_id);
+    } else {
+        //        SPDLOG_ERROR("Error in binding this thread to core {}.", core_id);
+    }
+}
+
 /*
  * SLAVESTART: main task for each processor
  */
-void SlaveStart()
+void SlaveStart(void* data)
 {
    //printf("SlaveStart begins\n");
    long ProcessId;
+   assert(data);
+   //std::cerr << "in SlaveStart 1\n";
+   int* cores = static_cast<int*>(data);
 
    /* Get unique ProcessId */
    LOCK(Global->CountLock);
      ProcessId = Global->current_id++;
    UNLOCK(Global->CountLock);
 
+   stick_this_thread_to_core(cores[static_cast<int>(ProcessId)]);
+
+   //std::cerr << "in SlaveStart 2\n";
    BARINCLUDE(Global->Barrier);
 
 /* POSSIBLE ENHANCEMENT:  Here is where one might pin processes to
@@ -476,8 +763,9 @@ void SlaveStart()
    while (Local[ProcessId].tnow < tstop + 0.1 * dtime) {
       stepsystem(ProcessId);
 //      printtree(Global->G_root);
-//      printf("Going to next step!!!\n");
+      //printf("Going to next step!!!\n");
    }
+   //std::cerr << "in SlaveStart 3\n";
    //printf("SlaveStart ends\n");
 }
 
@@ -490,7 +778,7 @@ void startrun()
 {
    long seed;
 
-   infile = getparam("in");
+   infile = getparam("in"); // alter getparam to read from the data structure containing data from stdin
    if (*infile != '\0'/*NULL*/) {
       inputdata();
    }
@@ -515,10 +803,10 @@ void startrun()
    dtout = getdparam("dtout");
    NPROC = getiparam("NPROC");
    Local[0].nstep = 0;
-   pranset(seed);
-   testdata();
-   ANLinit();
-   setbound();
+   pranset(seed); // no need for modification, can be repeated
+   testdata(); // create another variant of this function that does not initialize bodytab and repeat it
+   ANLinit(); // create another variant of ANLinit that only calls the variant of barinit
+   setbound(); // no need for modification, can be repeated
    Local[0].tout = Local[0].tnow + dtout;
 }
 
