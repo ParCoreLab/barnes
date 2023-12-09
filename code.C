@@ -395,18 +395,23 @@ int main (int argc, string argv[])
 	  Global->tracktime);
    
    // preprocessing begins here
-#if 0
+//#if 0
    std::cout << "Starting preprocesing algo..." << std::endl;
    const auto algo_start = high_resolution_clock::now();
 
    assert(NPROC > 1);  // below algo depends on this. we will find thread pairs.
    auto head = threadid_addresses_map.begin();
-   auto tail = std::next(threadid_addresses_map.begin());
+   std::cout << "here 1\n";
+   std::map<long, std::multiset<double *>>::iterator tail;
+   if(head != threadid_addresses_map.end())
+   	tail = std::next(threadid_addresses_map.begin());
+   std::cout << "here 2\n";
 
    std::multiset<tuple<int, int, int>, greater<>> total_comm_count_t1_t2;
    std::multiset<tuple<int, int, int, int>, greater<>> total_cha_freq_count_t1_t2;
 
    // map<pair<int, int>, multiset<Cell *>> pairing_addresses;
+   std::cout << "before head != threadid_addresses_map.end()" << std::endl;
    while (head != threadid_addresses_map.end()) {
         const auto orig_tail = tail;
         while (tail != threadid_addresses_map.end()) {
@@ -536,15 +541,28 @@ int main (int argc, string argv[])
         ii++;
     }
 
-    assert(thread_to_core.size() == NPROC);
+    //assert(thread_to_core.size() == NPROC);
     topo.printTopology(); 
 //#if 0
+
+    //initparam(defv); // modify initparam to read input from stdin only once
+    startrun_repeated(); // create another version of this function that reuses loaded data
+    initoutput(); // no need for modification, can be repeated
+    //tab_init(); // no need to be recalled in the next iteration of barnes computation
+
+    // the following 5 initializations need to be repeated before each iteration of barnes computation
+    Global->tracktime = 0;
+    Global->partitiontime = 0;
+    Global->treebuildtime = 0;
+    Global->forcecalctime = 0;
+    Global->current_id = 0;
+
     // cha aware BM.
     std::cout << "Now running cha aware BM" << std::endl;
     //assert(__threads__<__MAX_THREADS__);
     const auto cha_aware_start = high_resolution_clock::now();
 
-    CREATE(SlaveStart, static_cast<void*>(thread_to_core.data()), NPROC);
+    CREATE(SlaveStart, static_cast<void*>(/*thread_to_core.data()*/base_assigned_cores.data()), NPROC);
 
     WAIT_FOR_END(NPROC); 
     // std::cout << "AFTER JOIN. ended cha aware bm" << std::endl;
@@ -552,7 +570,7 @@ int main (int argc, string argv[])
     const auto cha_aware_end = high_resolution_clock::now();
     const auto elapsed_cha_aware = duration_cast<milliseconds>(cha_aware_end - cha_aware_start).count();
     std::cout << "Ended cha aware BM. elapsed time: " << elapsed_cha_aware << "ms" << std::endl;
-#endif
+//#endif
     // base BM.
 
     //initparam(defv); // modify initparam to read input from stdin only once
