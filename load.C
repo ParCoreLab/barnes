@@ -19,10 +19,11 @@ EXTERN_ENV
 
 #include "stdinc.h"
 
+#if 0
 /*
  * MAKETREE: initialize tree structure for hack force calculation.
  */
-
+template<bool is_preprocessing>
 void maketree(long ProcessId)
 {
    bodyptr p, *pp;
@@ -38,7 +39,7 @@ void maketree(long ProcessId)
       p = *pp;
       if (Mass(p) != 0.0) {
 	 Local[ProcessId].Current_Root
-	    = (nodeptr) loadtree(p, (cellptr) Local[ProcessId].Current_Root,
+	    = (nodeptr) loadtree<is_preprocessing>(p, (cellptr) Local[ProcessId].Current_Root,
 				 ProcessId);
       }
       else {
@@ -106,6 +107,7 @@ void maketree(long ProcessId)
         pthread_mutex_unlock(&(Global->Barrier).mutex);
    }
 }
+#endif
 
 cellptr InitCell(cellptr parent, long ProcessId)
 {
@@ -205,10 +207,11 @@ void printtree(nodeptr n)
    fflush(stdout);
 }
 
+#if 0
 /*
  * LOADTREE: descend tree and insert particle.
  */
-
+template<bool is_preprocessing>
 nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
 {
    long l, xp[NDIM], xor_arr[NDIM], flag;
@@ -313,7 +316,7 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
    SETV(Local[ProcessId].Root_Coords, xp);
    return Parent((leafptr) *qptr);
 }
-
+#endif
 
 /* * INTCOORD: compute integerized coordinates.  * Returns: TRUE
 unless rp was out of bounds.  */

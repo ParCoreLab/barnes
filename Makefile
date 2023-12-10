@@ -1,5 +1,6 @@
 TARGET = BARNES
 OBJS = code.o code_io.o load.o grav.o getparam.o util.o cha.o topology.o
+#OBJS = code.o code_io.o grav.o getparam.o util.o cha.o topology.o
 
 #CC := gcc
 CC := g++

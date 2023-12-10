@@ -83,6 +83,7 @@ MAIN_ENV
 #include "topology.h"
 
 std::map<long, std::multiset<double *>> threadid_addresses_map;
+pthread_spinlock_t map_spinlock;
 
 string defv[] = {                 /* DEFAULT PARAMETER VALUES              */
     /* file names for input/output                                         */
@@ -336,6 +337,8 @@ int main (int argc, string argv[])
    }
 
    Global = NULL;
+
+   pthread_spin_init(&map_spinlock, PTHREAD_PROCESS_SHARED);
    initparam(defv); // modify initparam to read input from stdin only once
    startrun(); // create another version of this function that reuses loaded data
    initoutput(); // no need for modification, can be repeated
@@ -372,7 +375,7 @@ int main (int argc, string argv[])
     std::cout << std::endl;
     assert(base_assigned_cores.size() == 28); 
 
-   CREATE(SlaveStart, static_cast<void*>(base_assigned_cores.data()), NPROC);
+   CREATE(SlaveStart<true>, static_cast<void*>(base_assigned_cores.data()), NPROC);
 
    WAIT_FOR_END(NPROC);
 
@@ -562,7 +565,7 @@ int main (int argc, string argv[])
     //assert(__threads__<__MAX_THREADS__);
     const auto cha_aware_start = high_resolution_clock::now();
 
-    CREATE(SlaveStart, static_cast<void*>(/*thread_to_core.data()*/base_assigned_cores.data()), NPROC);
+    CREATE(SlaveStart<false>, static_cast<void*>(thread_to_core.data() /*base_assigned_cores.data()*/), NPROC);
 
     WAIT_FOR_END(NPROC); 
     // std::cout << "AFTER JOIN. ended cha aware bm" << std::endl;
@@ -588,7 +591,7 @@ int main (int argc, string argv[])
     std::cout << "Now running base BM" << std::endl;
     const auto base_start = high_resolution_clock::now(); 
 
-    CREATE(SlaveStart, static_cast<void*>(base_assigned_cores.data()), NPROC);
+    CREATE(SlaveStart<false>, static_cast<void*>(base_assigned_cores.data()), NPROC);
 
     WAIT_FOR_END(NPROC);
 
@@ -600,7 +603,8 @@ int main (int argc, string argv[])
   
     //std::cout << "latency improv percentage: " << ((elapsed_base - elapsed_cha_aware) / static_cast<double>(elapsed_base)) * 100 << std::endl;
 //#endif
-
+    pthread_spin_destroy(&map_spinlock);
+    //std::cerr << "after pthread_spin_destroy\n";
     MAIN_END;
 }
 
@@ -767,6 +771,7 @@ void stick_this_thread_to_core(int core_id) {
 /*
  * SLAVESTART: main task for each processor
  */
+template<bool is_preprocessing>
 void SlaveStart(void* data)
 {
    //printf("SlaveStart begins\n");
@@ -832,7 +837,7 @@ void SlaveStart(void* data)
 
    /* main loop */
    while (Local[ProcessId].tnow < tstop + 0.1 * dtime) {
-      stepsystem(ProcessId);
+      stepsystem<is_preprocessing>(ProcessId);
 //      printtree(Global->G_root);
       //printf("Going to next step!!!\n");
    }
@@ -1099,11 +1104,280 @@ long intpow(long i, long j)
     return temp;
 }
 
+/*
+ * MAKETREE: initialize tree structure for hack force calculation.
+ */
+template<bool is_preprocessing>
+void maketree(long ProcessId)
+{
+   bodyptr p, *pp;
+
+   Local[ProcessId].myncell = 0;
+   Local[ProcessId].mynleaf = 0;
+   if (ProcessId == 0) {
+      Local[ProcessId].mycelltab[Local[ProcessId].myncell++] = Global->G_root;
+   }
+   Local[ProcessId].Current_Root = (nodeptr) Global->G_root;
+   for (pp = Local[ProcessId].mybodytab;
+        pp < Local[ProcessId].mybodytab+Local[ProcessId].mynbody; pp++) {
+      p = *pp;
+      if (Mass(p) != 0.0) {
+         Local[ProcessId].Current_Root
+            = (nodeptr) loadtree<is_preprocessing>(p, (cellptr) Local[ProcessId].Current_Root,
+                                 ProcessId);
+      }
+      else {
+         LOCK(Global->io_lock);
+         fprintf(stderr, "Process %ld found body %ld to have zero mass\n",
+                 ProcessId, (long) p);
+         UNLOCK(Global->io_lock);
+      }
+   }
+
+   {
+        unsigned long   Error, Cycle;
+        long            Cancel, Temp;
+
+        Error = pthread_mutex_lock(&(Global->Barrier).mutex);
+        if (Error != 0) {
+                printf("Error while trying to get lock in barrier.\n");
+                exit(-1);
+        }
+
+        Cycle = (Global->Barrier).cycle;
+        if (++(Global->Barrier).counter != (NPROC)) {
+                pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, (int *) &Cancel);
+                while (Cycle == (Global->Barrier).cycle) {
+                        Error = pthread_cond_wait(&(Global->Barrier).cv, &(Global->Barrier).mutex);
+                        if (Error != 0) {
+                                break;
+                        }
+                }
+                pthread_setcancelstate(Cancel, (int *) &Temp);
+        } else {
+                (Global->Barrier).cycle = !(Global->Barrier).cycle;
+                (Global->Barrier).counter = 0;
+                Error = pthread_cond_broadcast(&(Global->Barrier).cv);
+        }
+        pthread_mutex_unlock(&(Global->Barrier).mutex);
+   }
+
+   hackcofm(ProcessId );
+   {
+        unsigned long   Error, Cycle;
+        long            Cancel, Temp;
+
+        Error = pthread_mutex_lock(&(Global->Barrier).mutex);
+        if (Error != 0) {
+                printf("Error while trying to get lock in barrier.\n");
+                exit(-1);
+        }
+
+        Cycle = (Global->Barrier).cycle;
+        if (++(Global->Barrier).counter != (NPROC)) {
+                pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, (int *) &Cancel);
+                while (Cycle == (Global->Barrier).cycle) {
+                        Error = pthread_cond_wait(&(Global->Barrier).cv, &(Global->Barrier).mutex);
+                        if (Error != 0) {
+                                break;
+                        }
+                }
+                pthread_setcancelstate(Cancel, (int *) &Temp);
+        } else {
+                (Global->Barrier).cycle = !(Global->Barrier).cycle;
+                (Global->Barrier).counter = 0;
+                Error = pthread_cond_broadcast(&(Global->Barrier).cv);
+        }
+        pthread_mutex_unlock(&(Global->Barrier).mutex);
+   }
+}
+
+/*
+ *  * LOADTREE: descend tree and insert particle.
+ *   */
+template<bool is_preprocessing>
+nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
+{
+   long l, xp[NDIM], xor_arr[NDIM], flag;
+   long i, j, root_level;
+   bool valid_root;
+   long kidIndex;
+   volatile nodeptr *volatile qptr, mynode;
+   leafptr le;
+
+   intcoord(xp, Pos(p));
+   valid_root = TRUE;
+   for (i = 0; i < NDIM; i++) {
+      xor_arr[i] = xp[i] ^ Local[ProcessId].Root_Coords[i];
+   }
+   for (i = IMAX >> 1; i > Level(root); i >>= 1) {
+      for (j = 0; j < NDIM; j++) {
+         if (xor_arr[j] & i) {
+            valid_root = FALSE;
+            break;
+         }
+      }
+      if (!valid_root) {
+         break;
+      }
+   }
+   if (!valid_root) {
+      if (root != Global->G_root) {
+         root_level = Level(root);
+         for (j = i; j > root_level; j >>= 1) {
+            root = (cellptr) Parent(root);
+         }
+         valid_root = TRUE;
+         for (i = IMAX >> 1; i > Level(root); i >>= 1) {
+            for (j = 0; j < NDIM; j++) {
+               if (xor_arr[j] & i) {
+                  valid_root = FALSE;
+                  break;
+               }
+            }
+            if (!valid_root) {
+               printf("P%ld body %ld\n", ProcessId, p - bodytab);
+               root = Global->G_root;
+            }
+         }
+      }
+   }
+   root = Global->G_root;
+   mynode = (nodeptr) root;
+   kidIndex = subindex(xp, Level(mynode));
+   qptr = &Subp(mynode)[kidIndex];
+
+   l = Level(mynode) >> 1;
+   flag = TRUE;
+   while (flag) {                           /* loop descending tree     */
+      if (l == 0) {
+         error("not enough levels in tree\n");
+      }
+      if (*qptr == NULL) {
+         /* lock the parent cell */
+         ALOCK(CellLock->CL, ((cellptr) mynode)->seqnum % MAXLOCK);
+	 if constexpr (is_preprocessing)
+      	 { 
+        	pthread_spin_lock(&map_spinlock);
+
+        	threadid_addresses_map[ProcessId].insert(
+          		reinterpret_cast<double*>(
+            			reinterpret_cast<uintptr_t>(&(CellLock->CL)) &
+            				~(CACHELINE_SIZE - 1)
+          		)
+        	);
+
+                threadid_addresses_map[ProcessId].insert(
+                        reinterpret_cast<double*>(
+                                reinterpret_cast<uintptr_t>(&(((cellptr) mynode)->seqnum)) &
+                                        ~(CACHELINE_SIZE - 1)
+                        )
+                );
+                pthread_spin_unlock(&map_spinlock);
+      	}
+         if (*qptr == NULL) {
+            le = InitLeaf((cellptr) mynode, ProcessId);
+            Parent(p) = (nodeptr) le;
+            Level(p) = l;
+            ChildNum(p) = le->num_bodies;
+            ChildNum(le) = kidIndex;
+            Bodyp(le)[le->num_bodies++] = p;
+            *qptr = (nodeptr) le;
+            flag = FALSE;
+         }
+         AULOCK(CellLock->CL, ((cellptr) mynode)->seqnum % MAXLOCK);
+	 if constexpr (is_preprocessing)
+         {
+                pthread_spin_lock(&map_spinlock);
+
+                threadid_addresses_map[ProcessId].insert(
+                        reinterpret_cast<double*>(
+                                reinterpret_cast<uintptr_t>(&(CellLock->CL)) &
+                                        ~(CACHELINE_SIZE - 1)
+                        )
+                );
+		threadid_addresses_map[ProcessId].insert(
+                        reinterpret_cast<double*>(
+                                reinterpret_cast<uintptr_t>(&(((cellptr) mynode)->seqnum)) &
+                                        ~(CACHELINE_SIZE - 1)
+                        )
+                );
+                pthread_spin_unlock(&map_spinlock);
+        }
+         /* unlock the parent cell */
+      }
+      if (flag && *qptr && (Type(*qptr) == LEAF)) {
+         /*   reached a "leaf"?      */
+         ALOCK(CellLock->CL, ((cellptr) mynode)->seqnum % MAXLOCK);
+	 if constexpr (is_preprocessing)
+         {
+                pthread_spin_lock(&map_spinlock);
+
+                threadid_addresses_map[ProcessId].insert(
+                        reinterpret_cast<double*>(
+                                reinterpret_cast<uintptr_t>(&(CellLock->CL)) &
+                                        ~(CACHELINE_SIZE - 1)
+                        )
+                );
+		threadid_addresses_map[ProcessId].insert(
+                        reinterpret_cast<double*>(
+                                reinterpret_cast<uintptr_t>(&(((cellptr) mynode)->seqnum)) &
+                                        ~(CACHELINE_SIZE - 1)
+                        )
+                );
+                pthread_spin_unlock(&map_spinlock);
+         }
+         /* lock the parent cell */
+         if (Type(*qptr) == LEAF) {             /* still a "leaf"?      */
+            le = (leafptr) *qptr;
+            if (le->num_bodies == MAX_BODIES_PER_LEAF) {
+               *qptr = (nodeptr) SubdivideLeaf(le, (cellptr) mynode, l,
+                                                  ProcessId);
+            }
+            else {
+               Parent(p) = (nodeptr) le;
+               Level(p) = l;
+               ChildNum(p) = le->num_bodies;
+               Bodyp(le)[le->num_bodies++] = p;
+               flag = FALSE;
+            }
+         }
+         AULOCK(CellLock->CL, ((cellptr) mynode)->seqnum % MAXLOCK);
+	 if constexpr (is_preprocessing)
+         {
+                pthread_spin_lock(&map_spinlock);
+
+                threadid_addresses_map[ProcessId].insert(
+                        reinterpret_cast<double*>(
+                                reinterpret_cast<uintptr_t>(&(CellLock->CL)) &
+                                        ~(CACHELINE_SIZE - 1)
+                        )
+                );
+		threadid_addresses_map[ProcessId].insert(
+                        reinterpret_cast<double*>(
+                                reinterpret_cast<uintptr_t>(&(((cellptr) mynode)->seqnum)) &
+                                        ~(CACHELINE_SIZE - 1)
+                        )
+                );
+                pthread_spin_unlock(&map_spinlock);
+        }
+         /* unlock the node           */
+      }
+      if (flag) {
+         mynode = *qptr;
+         kidIndex = subindex(xp, l);
+         qptr = &Subp(*qptr)[kidIndex];  /* move down one level  */
+         l = l >> 1;                            /* and test next bit    */
+      }
+   }
+   SETV(Local[ProcessId].Root_Coords, xp);
+   return Parent((leafptr) *qptr);
+}
 
 /*
  * STEPSYSTEM: advance N-body system one time-step.
  */
-
+template<bool is_preprocessing>
 void stepsystem(long ProcessId)
 {
     long i;
@@ -1168,7 +1442,7 @@ void stepsystem(long ProcessId)
     }
 
     /* load bodies into tree   */
-    maketree(ProcessId);
+    maketree<is_preprocessing>(ProcessId);
     if ((ProcessId == 0) && (Local[ProcessId].nstep >= 2)) {
         CLOCK(treebuildend);
         Global->treebuildtime += treebuildend - treebuildstart;

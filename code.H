@@ -135,8 +135,12 @@ struct local_memory {
 };
 global struct local_memory Local[MAX_PROC];
 
+template<bool is_preprocessing> 
 void SlaveStart(void* data);
+
+template<bool is_preprocessing> 
 void stepsystem(long ProcessId);
+
 void ComputeForces(long ProcessId);
 void Help(void);
 void ANLinit(void);
