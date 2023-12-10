@@ -141,6 +141,7 @@ void SlaveStart(void* data);
 template<bool is_preprocessing> 
 void stepsystem(long ProcessId);
 
+template<bool is_preprocessing>
 void ComputeForces(long ProcessId);
 void Help(void);
 void ANLinit(void);

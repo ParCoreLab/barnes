@@ -81,6 +81,8 @@ MAIN_ENV
 #include "stdinc.h"
 #include "cha.h"
 #include "topology.h"
+#include "load.h"
+#include "grav.h"
 
 std::map<long, std::multiset<double *>> threadid_addresses_map;
 pthread_spinlock_t map_spinlock;
@@ -1162,7 +1164,7 @@ void maketree(long ProcessId)
         pthread_mutex_unlock(&(Global->Barrier).mutex);
    }
 
-   hackcofm(ProcessId );
+   hackcofm<is_preprocessing>(ProcessId );
    {
         unsigned long   Error, Cycle;
         long            Cancel, Temp;
@@ -1331,7 +1333,7 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
          if (Type(*qptr) == LEAF) {             /* still a "leaf"?      */
             le = (leafptr) *qptr;
             if (le->num_bodies == MAX_BODIES_PER_LEAF) {
-               *qptr = (nodeptr) SubdivideLeaf(le, (cellptr) mynode, l,
+               *qptr = (nodeptr) SubdivideLeaf<is_preprocessing>(le, (cellptr) mynode, l,
                                                   ProcessId);
             }
             else {
@@ -1372,6 +1374,225 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
    }
    SETV(Local[ProcessId].Root_Coords, xp);
    return Parent((leafptr) *qptr);
+}
+
+template<bool is_preprocessing>
+cellptr SubdivideLeaf(leafptr le, cellptr parent, long l, long ProcessId)
+{  
+   cellptr c;
+   long i, index;
+   long xp[NDIM];
+   bodyptr bodies[MAX_BODIES_PER_LEAF];
+   long num_bodies;
+   bodyptr p;
+   
+   /* first copy leaf's bodies to temp array, so we can reuse the leaf */
+   num_bodies = le->num_bodies;
+   for (i = 0; i < num_bodies; i++) {
+      bodies[i] = Bodyp(le)[i];
+      Bodyp(le)[i] = NULL;
+   }
+   le->num_bodies = 0;
+   /* create the parent cell for this subtree */
+   c = InitCell<is_preprocessing>(parent, ProcessId);
+   ChildNum(c) = ChildNum(le);
+   /* do first particle separately, so we can reuse le */
+   p = bodies[0];
+   intcoord(xp, Pos(p));
+   index = subindex(xp, l);
+   Subp(c)[index] = (nodeptr) le;
+   ChildNum(le) = index;
+   Parent(le) = (nodeptr) c;
+   Level(le) = l >> 1;
+   /* set stuff for body */
+   Parent(p) = (nodeptr) le;
+   ChildNum(p) = le->num_bodies;
+   Level(p) = l >> 1;
+   /* insert the body */
+   Bodyp(le)[le->num_bodies++] = p;
+   /* now handle the rest */
+   for (i = 1; i < num_bodies; i++) {
+      p = bodies[i];
+      intcoord(xp, Pos(p));
+      index = subindex(xp, l);
+      if (!Subp(c)[index]) {
+         le = InitLeaf(c, ProcessId);
+         ChildNum(le) = index;
+         Subp(c)[index] = (nodeptr) le;
+      }
+      else {
+         le = (leafptr) Subp(c)[index];
+      }
+      Parent(p) = (nodeptr) le;
+      ChildNum(p) = le->num_bodies;
+      Level(p) = l >> 1;
+      Bodyp(le)[le->num_bodies++] = p;
+   }
+   return c;
+}
+
+
+template<bool is_preprocessing>
+cellptr InitCell(cellptr parent, long ProcessId)
+{
+   cellptr c;
+
+   c = makecell<is_preprocessing>(ProcessId);
+   c->processor = ProcessId;
+   c->next = NULL;
+   c->prev = NULL;
+   if (parent == NULL)
+      Level(c) = IMAX >> 1;
+   else
+      Level(c) = Level(parent) >> 1;
+   Parent(c) = (nodeptr) parent;
+   ChildNum(c) = 0;
+   return (c);
+}
+
+
+/*
+ *  * MAKECELL: allocation routine for cells.
+ *   */
+template<bool is_preprocessing>
+cellptr makecell(long ProcessId)
+{
+   cellptr c;
+   long i, Mycell;
+
+   if (Local[ProcessId].mynumcell == maxmycell) {
+      error("makecell: Proc %ld needs more than %ld cells; increase fcells\n",
+            ProcessId,maxmycell);
+   }
+   Mycell = Local[ProcessId].mynumcell++;
+   c = Local[ProcessId].ctab + Mycell;
+   c->seqnum = ProcessId*maxmycell+Mycell;
+   if constexpr (is_preprocessing)
+         {
+                pthread_spin_lock(&map_spinlock);
+
+                threadid_addresses_map[ProcessId].insert(
+                        reinterpret_cast<double*>(
+                                reinterpret_cast<uintptr_t>(&(c->seqnum)) &
+                                        ~(CACHELINE_SIZE - 1)
+                        )
+                );
+                pthread_spin_unlock(&map_spinlock);
+        } 
+   Type(c) = CELL;
+   Done(c) = FALSE;
+   Mass(c) = 0.0;
+   for (i = 0; i < NSUB; i++) {
+      Subp(c)[i] = NULL;
+   }
+   Local[ProcessId].mycelltab[Local[ProcessId].myncell++] = c;
+   return (c);
+}
+
+/*
+ *  * HACKCOFM: descend tree finding center-of-mass coordinates.
+ *   */
+template<bool is_preprocessing>
+void hackcofm(long ProcessId)
+{
+   long i;
+   nodeptr r;
+   leafptr l;
+   leafptr* ll;
+   bodyptr p;
+   cellptr q;
+   cellptr *cc;
+   vector tmpv;
+
+   /* get a cell using get*sub.  Cells are got in reverse of the order in */
+   /* the cell array; i.e. reverse of the order in which they were created */
+   /* this way, we look at child cells before parents                    */
+
+   for (ll = Local[ProcessId].myleaftab + Local[ProcessId].mynleaf - 1;
+        ll >= Local[ProcessId].myleaftab; ll--) {
+      l = *ll;
+      Mass(l) = 0.0;
+      Cost(l) = 0;
+      CLRV(Pos(l));
+      for (i = 0; i < l->num_bodies; i++) {
+         p = Bodyp(l)[i];
+         Mass(l) += Mass(p);
+         Cost(l) += Cost(p);
+         MULVS(tmpv, Pos(p), Mass(p));
+         ADDV(Pos(l), Pos(l), tmpv);
+      }
+      DIVVS(Pos(l), Pos(l), Mass(l));
+#ifdef QUADPOLE
+      CLRM(Quad(l));
+      for (i = 0; i < l->num_bodies; i++) {
+         p = Bodyp(l)[i];
+         SUBV(dr, Pos(p), Pos(l));
+         OUTVP(drdr, dr, dr);
+         DOTVP(drsq, dr, dr);
+         SETMI(Idrsq);
+         MULMS(Idrsq, Idrsq, drsq);
+         MULMS(tmpm, drdr, 3.0);
+         SUBM(tmpm, tmpm, Idrsq);
+         MULMS(tmpm, tmpm, Mass(p));
+         ADDM(Quad(l), Quad(l), tmpm);
+      }
+#endif
+      Done(l)=TRUE;
+   }
+   for (cc = Local[ProcessId].mycelltab+Local[ProcessId].myncell-1;
+        cc >= Local[ProcessId].mycelltab; cc--) {
+      q = *cc;
+      Mass(q) = 0.0;
+      Cost(q) = 0;
+      CLRV(Pos(q));
+      for (i = 0; i < NSUB; i++) {
+         r = Subp(q)[i];
+         if (r != NULL) {
+            while(!Done(r)) {
+               /* wait */
+            }
+            Mass(q) += Mass(r);
+            Cost(q) += Cost(r);
+            MULVS(tmpv, Pos(r), Mass(r));
+            ADDV(Pos(q), Pos(q), tmpv);
+
+	    if constexpr (is_preprocessing)
+            {
+                pthread_spin_lock(&map_spinlock);
+
+                threadid_addresses_map[ProcessId].insert(
+                        reinterpret_cast<double*>(
+                                reinterpret_cast<uintptr_t>(&(Pos(q))) &
+                                        ~(CACHELINE_SIZE - 1)
+                        )
+                );
+                pthread_spin_unlock(&map_spinlock);
+           }
+
+            Done(r) = FALSE;
+         }
+      }
+      DIVVS(Pos(q), Pos(q), Mass(q));
+#ifdef QUADPOLE
+      CLRM(Quad(q));
+      for (i = 0; i < NSUB; i++) {
+         r = Subp(q)[i];
+         if (r != NULL) {
+            SUBV(dr, Pos(r), Pos(q));
+            OUTVP(drdr, dr, dr);
+            DOTVP(drsq, dr, dr);
+            SETMI(Idrsq);
+            MULMS(Idrsq, Idrsq, drsq);
+            MULMS(tmpm, drdr, 3.0);
+            SUBM(tmpm, tmpm, Idrsq);
+            MULMS(tmpm, tmpm, Mass(r));
+            ADDM(tmpm, tmpm, Quad(r));
+            ADDM(Quad(q), Quad(q), tmpm);
+         }
+      }
+#endif
+      Done(q)=TRUE;
+   }
 }
 
 /*
@@ -1472,7 +1693,7 @@ void stepsystem(long ProcessId)
         CLOCK(forcecalcstart);
     }
 
-    ComputeForces(ProcessId);
+    ComputeForces<is_preprocessing>(ProcessId);
 
     if ((ProcessId == 0) && (Local[ProcessId].nstep >= 2)) {
         CLOCK(forcecalcend);
@@ -1563,7 +1784,102 @@ void stepsystem(long ProcessId)
 }
 
 
+/*
+ *  * HACKGRAV: evaluate grav field at a given particle.
+ *   */
+template<bool is_preprocessing>
+void hackgrav(bodyptr p, long ProcessId)
+{
+   Local[ProcessId].pskip = p;
+   SETV(Local[ProcessId].pos0, Pos(p));
+   Local[ProcessId].phi0 = 0.0;
+   CLRV(Local[ProcessId].acc0);
+   Local[ProcessId].myn2bterm = 0;
+   Local[ProcessId].mynbcterm = 0;
+   Local[ProcessId].skipself = FALSE;
+   hackwalk<is_preprocessing>(ProcessId);
+   Phi(p) = Local[ProcessId].phi0;
+   SETV(Acc(p), Local[ProcessId].acc0);
+#ifdef QUADPOLE
+   Cost(p) = Local[ProcessId].myn2bterm + NDIM * Local[ProcessId].mynbcterm;
+#else
+   Cost(p) = Local[ProcessId].myn2bterm + Local[ProcessId].mynbcterm;
+#endif
+}
 
+/*
+ *  * HACKWALK: walk the tree opening cells too close to a given point.
+ *   */
+template<bool is_preprocessing>
+void hackwalk(long ProcessId)
+{
+    walksub<is_preprocessing>(reinterpret_cast <nodeptr>(Global->G_root), Global->rsize * Global->rsize, ProcessId);
+}
+
+/*
+ *  * WALKSUB: recursive routine to do hackwalk operation.
+ *   */
+template<bool is_preprocessing>
+void walksub(nodeptr n, real dsq, long ProcessId)
+{
+   nodeptr* nn;
+   leafptr l;
+   bodyptr p;
+   long i;
+
+   if (subdivp<is_preprocessing>(n, dsq, ProcessId)) {
+      if (Type(n) == CELL) {
+         for (nn = Subp(n); nn < Subp(n) + NSUB; nn++) {
+            if (*nn != NULL) {
+               walksub<is_preprocessing>(*nn, dsq / 4.0, ProcessId);
+            }
+         }
+      }
+      else {
+         l = (leafptr) n;
+         for (i = 0; i < l->num_bodies; i++) {
+            p = Bodyp(l)[i];
+            if (p != Local[ProcessId].pskip) {
+               gravsub(reinterpret_cast <nodeptr>(p), ProcessId);
+            }
+            else {
+               Local[ProcessId].skipself = TRUE;
+            }
+         }
+      }
+   }
+   else {
+      gravsub(n, ProcessId);
+   }
+}
+
+/*
+ *  * SUBDIVP: decide if a node should be opened.
+ *   * Side effects: sets  pmem,dr, and drsq.
+ *    */
+template<bool is_preprocessing>
+bool subdivp(register nodeptr p, real dsq, long ProcessId)
+{
+   SUBV(Local[ProcessId].dr, Pos(p), Local[ProcessId].pos0);
+
+   if constexpr (is_preprocessing)
+   {
+   	pthread_spin_lock(&map_spinlock);
+
+   	threadid_addresses_map[ProcessId].insert(
+        reinterpret_cast<double*>(
+        	reinterpret_cast<uintptr_t>(&(Pos(p))) &
+             		~(CACHELINE_SIZE - 1)
+                )
+        );
+	pthread_spin_unlock(&map_spinlock);
+   }
+   DOTVP(Local[ProcessId].drsq, Local[ProcessId].dr, Local[ProcessId].dr);
+   Local[ProcessId].pmem = p;
+   return (tolsq * Local[ProcessId].drsq < dsq);
+}
+
+template<bool is_preprocessing>
 void ComputeForces(long ProcessId)
 {
    bodyptr p,*pp;
@@ -1574,7 +1890,7 @@ void ComputeForces(long ProcessId)
       p = *pp;
       SETV(acc1, Acc(p));
       Cost(p)=0;
-      hackgrav(p,ProcessId);
+      hackgrav<is_preprocessing>(p,ProcessId);
       Local[ProcessId].myn2bcalc += Local[ProcessId].myn2bterm;
       Local[ProcessId].mynbccalc += Local[ProcessId].mynbcterm;
       if (!Local[ProcessId].skipself) {       /*   did we miss self-int?  */

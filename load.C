@@ -109,6 +109,7 @@ void maketree(long ProcessId)
 }
 #endif
 
+#if 0
 cellptr InitCell(cellptr parent, long ProcessId)
 {
    cellptr c;
@@ -125,6 +126,7 @@ cellptr InitCell(cellptr parent, long ProcessId)
    ChildNum(c) = 0;
    return (c);
 }
+#endif
 
 leafptr InitLeaf(cellptr parent, long ProcessId)
 {
@@ -370,8 +372,7 @@ long subindex(long x[NDIM], long l)
    return (i);
 }
 
-
-
+#if 0
 /*
  * HACKCOFM: descend tree finding center-of-mass coordinates.
  */
@@ -463,7 +464,9 @@ void hackcofm(long ProcessId)
       Done(q)=TRUE;
    }
 }
+#endif
 
+#if 0
 cellptr SubdivideLeaf(leafptr le, cellptr parent, long l, long ProcessId)
 {
    cellptr c;
@@ -517,7 +520,9 @@ cellptr SubdivideLeaf(leafptr le, cellptr parent, long l, long ProcessId)
    }
    return c;
 }
+#endif
 
+#if 0
 /*
  * MAKECELL: allocation routine for cells.
  */
@@ -543,6 +548,7 @@ cellptr makecell(long ProcessId)
    Local[ProcessId].mycelltab[Local[ProcessId].myncell++] = c;
    return (c);
 }
+#endif
 
 /*
  * MAKELEAF: allocation routine for leaves.

@@ -23,6 +23,7 @@ EXTERN_ENV
 
 #include "stdinc.h"
 
+#if 0
 /*
  * HACKGRAV: evaluate grav field at a given particle.
  */
@@ -45,7 +46,7 @@ void hackgrav(bodyptr p, long ProcessId)
    Cost(p) = Local[ProcessId].myn2bterm + Local[ProcessId].mynbcterm;
 #endif
 }
-
+#endif
 
 
 /*
@@ -89,6 +90,7 @@ void gravsub(register nodeptr p, long ProcessId)
     }
 }
 
+#if 0
 /*
  * HACKWALK: walk the tree opening cells too close to a given point.
  */
@@ -97,7 +99,9 @@ void hackwalk(long ProcessId)
 {
     walksub(reinterpret_cast <nodeptr>(Global->G_root), Global->rsize * Global->rsize, ProcessId);
 }
+#endif
 
+#if 0
 /*
  * WALKSUB: recursive routine to do hackwalk operation.
  */
@@ -147,4 +151,4 @@ bool subdivp(register nodeptr p, real dsq, long ProcessId)
    Local[ProcessId].pmem = p;
    return (tolsq * Local[ProcessId].drsq < dsq);
 }
-
+#endif
