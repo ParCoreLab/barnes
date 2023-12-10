@@ -612,13 +612,15 @@ void ANLinit()
    MAIN_INITENV(,70000000,);
    /* Allocate global, shared memory */
 
-   //Global = (struct GlobalMemory *) G_MALLOC(sizeof(struct GlobalMemory));
-   //if (Global==NULL) error("No initialization for Global\n");
+   Global = (struct GlobalMemory *) G_MALLOC(sizeof(struct GlobalMemory));
+   if (Global==NULL) error("No initialization for Global\n");
 
+#if 0
    const int ret = posix_memalign((void **)(&Global), CACHELINE_SIZE, sizeof(struct GlobalMemory));
    assert(ret == 0);
 
    if (Global==NULL) error("No initialization for Global\n"); 
+#endif
 
    // create a variant of barinit that only zeroes out counter and cycle
    BARINIT(Global->Barrier, NPROC); 
@@ -705,7 +707,13 @@ void tab_init()
    maxleaf = (long) ((double) fleaves * nbody);
    maxcell = fcells * maxleaf;
    for (i = 0; i < NPROC; ++i) {
-      Local[i].ctab = (cellptr) G_MALLOC((maxcell / NPROC) * sizeof(cell));
+      //Local[i].ctab = (cellptr) G_MALLOC((maxcell / NPROC) * sizeof(cell));
+
+      const int ret = posix_memalign((void **)(&(Local[i].ctab)), CACHELINE_SIZE, (maxcell / NPROC) * sizeof(cell));
+      assert(ret == 0);
+
+      if (Local[i].ctab==NULL) error("No initialization for ctab\n");
+
       Local[i].ltab = (leafptr) G_MALLOC((maxleaf / NPROC) * sizeof(leaf));
    }
 
@@ -722,7 +730,13 @@ void tab_init()
    Local[0].mycelltab = (cellptr*) G_MALLOC(NPROC*maxmycell*sizeof(cellptr));
    Local[0].myleaftab = (leafptr*) G_MALLOC(NPROC*maxmyleaf*sizeof(leafptr));
 
-   CellLock = (struct CellLockType *) G_MALLOC(sizeof(struct CellLockType));
+   //CellLock = (struct CellLockType *) G_MALLOC(sizeof(struct CellLockType));
+
+   const int ret = posix_memalign((void **)(&CellLock), CACHELINE_SIZE, sizeof(struct CellLockType));
+   assert(ret == 0);
+
+   if (CellLock==NULL) error("No initialization for CellLock\n");
+
    ALOCKINIT(CellLock->CL,MAXLOCK);
 }
 
