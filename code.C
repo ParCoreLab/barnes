@@ -75,6 +75,7 @@ MAIN_ENV
 #include <set>
 #include <bits/stdc++.h>
 #include <unordered_map>
+#include <fcntl.h>
 
 #define global  /* nada */
 
@@ -83,6 +84,7 @@ MAIN_ENV
 #include "topology.h"
 #include "load.h"
 #include "grav.h"
+#include "constants.h"
 
 std::map<long, std::multiset<double *>> threadid_addresses_map;
 pthread_spinlock_t map_spinlock;
@@ -110,6 +112,8 @@ string defv[] = {                 /* DEFAULT PARAMETER VALUES              */
 };
 
 /* The more complicated 3D case */
+#define NUM_SOCKETS 2
+#define NUM_CHA_BOXES 28
 #define NUM_DIRECTIONS 32
 #define BRC_FUC 0
 #define BRC_FRA 1
@@ -146,6 +150,223 @@ string defv[] = {                 /* DEFAULT PARAMETER VALUES              */
 #define FDA_BLA 31
 
 #define CACHELINE_SIZE 64
+
+//static const long CHA_MSR_PMON_CTRL_BASE = 0x0E01L;
+
+enum class TrafficType
+{
+	Data,
+	Address,
+	Acknowledge,
+	Invalidate
+};
+
+std::string enumToStr(TrafficType traffic_type)
+{
+	std::string res;
+	switch (traffic_type)
+	{
+		case TrafficType::Data:
+			res = "data";
+			break;
+		case TrafficType::Address:
+			res = "address";
+			break;
+		case TrafficType::Acknowledge:
+			res = "acknowledge";
+			break;
+		case TrafficType::Invalidate:
+			res = "invalidate";
+			break;
+		default:
+			res = "unknown";
+			break;
+	}
+
+	return res;
+}
+
+std::map<int, int> getMsrFds()
+{
+        // SPDLOG_TRACE(__PRETTY_FUNCTION__);
+
+        std::map<int, int> fd_map;
+
+        char filename[100];
+
+        auto logical_core_count = getCoreCount();
+        // SPDLOG_TRACE("logical core count: {}", logical_core_count);
+
+        for(auto i = 0; i < logical_core_count; ++i) {
+            sprintf(filename, "/dev/cpu/%d/msr",i);
+
+            int fd = open(filename, O_RDWR);
+
+            if(fd >= 0) {
+                // SPDLOG_TRACE("Opened fd: {}", fd);
+                fd_map.insert({i, fd});
+            } else if(fd == -1) {
+                // SPDLOG_ERROR("error on open(): {}", strerror(errno));
+            }
+        }
+
+        for(const auto& p : fd_map) {
+            // SPDLOG_TRACE("MSR fd of core {}: {}", p.first, p.second);
+        }
+
+        return fd_map;
+}
+
+void setAllUncoreRegisters(const std::vector<unsigned int>& vals)
+{
+        // SPDLOG_TRACE(__PRETTY_FUNCTION__);
+
+        // SPDLOG_TRACE("Setting all uncore registers with values: ");
+        for(auto val : vals) {
+            // SPDLOG_TRACE("{:x}", val);
+        }
+
+        int processor_in_socket[NUM_SOCKETS];
+        int logical_core_count = getCoreCount();
+        processor_in_socket[0] = 0;
+        processor_in_socket[1] = logical_core_count - 1;
+
+        auto msr_fds = getMsrFds();
+
+        for(auto socket = 0; socket < NUM_SOCKETS; ++socket) {
+            for(auto cha = 0; cha < NUM_CHA_BOXES; ++cha) {
+                int core = processor_in_socket[socket];
+
+                for(auto i = 0u; i < vals.size(); ++i) {
+                    uint64_t val = vals[i];
+                    uint64_t offset = CHA_MSR_PMON_CTRL_BASE + (0x10 * cha) + i;
+
+                    ssize_t rc64 = pwrite(msr_fds[core], &val, sizeof(val), offset);
+                    if(rc64 == 8) {
+                        // SPDLOG_TRACE("Configuring socket {}, CHA {}, by writing 0x{:x} to core {} (fd: {}), offset 0x{:x}.",
+//                                      socket, cha, val, core, msr_fds[core], offset);
+                    } else {
+                        // SPDLOG_ERROR("Error writing all data to MSR device on core {}, written {} bytes.", core, rc64);
+                    }
+                }
+            }
+        }
+
+        /// it is important to close this as well, otherwise we will have fd leak.
+        // SPDLOG_TRACE("closing file descriptors of MSRs.");
+        for(const auto& p : msr_fds) {
+            int cpu = p.first;
+            int to_be_closed = p.second;
+            // SPDLOG_TRACE("closing fd {} of cpu {}.", to_be_closed, cpu);
+            ::close(to_be_closed);
+            // SPDLOG_TRACE("closed fd: {}", to_be_closed);
+        }
+}
+
+std::vector<std::vector<uint64_t>> storeTraffic(TrafficType traffic_type)
+{
+	std::vector<std::vector<uint64_t>> res;
+
+	auto msr_fds = getMsrFds();
+
+	unsigned int left_val = 0;
+	unsigned int right_val = 0;
+	unsigned int up_val = 0;
+	unsigned int down_val = 0;
+
+	if (traffic_type == TrafficType::Data)
+	{
+		left_val = LEFT_BL_READ;
+		right_val = RIGHT_BL_READ;
+		up_val = UP_BL_READ;
+		down_val = DOWN_BL_READ;
+	}
+	else if (traffic_type == TrafficType::Address)
+	{
+		left_val = LEFT_AD_READ;
+		right_val = RIGHT_AD_READ;
+		up_val = UP_AD_READ;
+		down_val = DOWN_AD_READ;
+	}
+	else if (traffic_type == TrafficType::Acknowledge)
+	{
+		left_val = LEFT_AK_READ;
+		right_val = RIGHT_AK_READ;
+		up_val = UP_AK_READ;
+		down_val = DOWN_AK_READ;
+	}
+	else if (traffic_type == TrafficType::Invalidate)
+	{
+		left_val = LEFT_IV_READ;
+		right_val = RIGHT_IV_READ;
+		up_val = UP_IV_READ;
+		down_val = DOWN_IV_READ;
+	}
+	else
+	{
+		std::cerr << "unexpected traffic type!";
+		std::exit(1);
+	}
+
+	std::vector<unsigned int> vals = {left_val, right_val, up_val, down_val, FILTER0_OFF, FILTER1_OFF};
+	setAllUncoreRegisters(vals);
+
+	/// popping up filter values since we will not read from them.
+	vals.pop_back();
+	vals.pop_back();
+
+	//SPDLOG_DEBUG("---------------- FIRST READINGS ----------------");
+	for (int socket = 0; socket < /*NUM_SOCKETS*/ 1; ++socket)
+	{                  // we will work on socket-0
+		long core = 0; // this line will only work for socket-0!
+
+		for (int cha = 0; cha < NUM_CHA_BOXES; ++cha)
+		{
+			std::vector<uint64_t> direction_vals;
+
+			for (int i = 0; i < vals.size(); ++i)
+			{
+				uint64_t msr_val;
+				uint64_t msr_num = CHA_MSR_PMON_CTR_BASE + (CHA_BASE * cha) + i;
+				//SPDLOG_DEBUG("Executing pread() --> fd: {}, offset: {:x}", msr_fds[core], msr_num);
+				ssize_t rc64 = pread(msr_fds[core], &msr_val, sizeof(msr_val), msr_num);
+				if (rc64 != sizeof(msr_val))
+				{
+					//SPDLOG_ERROR("EXIT FAILURE. rc64: {}", rc64);
+					//SPDLOG_ERROR("error: {}", strerror(errno));
+					exit(EXIT_FAILURE);
+				}
+				else
+				{
+					direction_vals.push_back(msr_val);
+					//SPDLOG_DEBUG("Read {} from socket {}, CHA {} on core {}, offset 0x{:x}.", msr_val, socket, cha, core, msr_num);
+				}
+			}
+
+			res.push_back(direction_vals);
+		}
+	}
+
+	//SPDLOG_DEBUG("closing file descriptors of MSRs.");
+	for (const auto &p : msr_fds)
+	{
+		int cpu = p.first;
+		int to_be_closed = p.second;
+		//SPDLOG_DEBUG("closing fd {} of cpu {}.", to_be_closed, cpu);
+		::close(to_be_closed);
+	}
+
+	return res;
+}
+
+enum class BenchmarkOption
+{
+	None,
+	OnlyDefault,
+	OnlyChaAware,
+	Both
+};
+
 
 static long Child_Sequence[NUM_DIRECTIONS][NSUB] =
 {
@@ -357,8 +578,14 @@ int main (int argc, string argv[])
    using std::chrono::duration;
    using std::chrono::duration_cast;
    using std::chrono::high_resolution_clock;
-   using std::chrono::milliseconds;
+   //using std::chrono::milliseconds;
+   using std::chrono::nanoseconds;
 
+#if 0
+   uint64_t total_traffic_diff = 0;
+    const int traffic_i = (const int) TrafficType::Invalidate;
+    const auto traffic_type = static_cast<TrafficType>(traffic_i);
+#endif
    CLOCK(Global->computestart);
 
    printf("COMPUTESTART  = %12lu\n",Global->computestart);
@@ -376,10 +603,13 @@ int main (int argc, string argv[])
     }
     std::cout << std::endl;
     assert(base_assigned_cores.size() == 28); 
-
+//#if 0
+   std::cerr << "before SlaveStart\n";
+   //const auto &before_traffic_vals = storeTraffic(traffic_type);
    CREATE(SlaveStart<true>, static_cast<void*>(base_assigned_cores.data()), NPROC);
-
+//#endif
    WAIT_FOR_END(NPROC);
+   //const auto &after_traffic_vals = storeTraffic(traffic_type);
 
    CLOCK(Global->computeend);
 
@@ -400,7 +630,7 @@ int main (int argc, string argv[])
 	  Global->tracktime);
    
    // preprocessing begins here
-//#if 0
+#if 0
    std::cout << "Starting preprocesing algo..." << std::endl;
    const auto algo_start = high_resolution_clock::now();
 
@@ -480,7 +710,7 @@ int main (int argc, string argv[])
             // auto tile = topo.getTile(std::get<1>(*it));
             auto tile = topo.getTile(cha_id);
             // SPDLOG_TRACE("cha {}, is colocated with core {}", cha_id, tile.core);
-            // if (thread_to_core[tid_pair.first] == -1)
+            //if (thread_to_core[tid_pair.first] == -1)
             {
                 // SPDLOG_INFO("fetching a tile closest to tile with cha {} and core {}, cha supposed to be {}",
                 // tile.cha, tile.core, std::get<1>(*it));
@@ -498,7 +728,7 @@ int main (int argc, string argv[])
             }
 #endif
 
-            // if (thread_to_core[tid_pair.second] == -1)
+            //if (thread_to_core[tid_pair.second] == -1)
             {
                 // SPDLOG_INFO("fetching a tile closest to tile with cha {} and core {}, cha supposed to be {}",
                 // tile.cha, tile.core, std::get<1>(*it));
@@ -537,7 +767,8 @@ int main (int argc, string argv[])
 
 
     const auto algo_end = high_resolution_clock::now();
-    std::cout << "Ended preprocesing algo. elapsed time: " << duration_cast<milliseconds>(algo_end - algo_start).count() << "ms" << std::endl;
+    //std::cout << "Ended preprocesing algo. elapsed time: " << duration_cast<milliseconds>(algo_end - algo_start).count() << "ms" << std::endl;
+    std::cout << "Ended preprocesing algo. elapsed time: " << duration_cast<nanoseconds>(algo_end - algo_start).count() << "ms" << std::endl;
 
     int ii = 0;
     for (auto ptr : thread_to_core) {
@@ -548,7 +779,9 @@ int main (int argc, string argv[])
 
     //assert(thread_to_core.size() == NPROC);
     topo.printTopology(); 
-//#if 0
+#if 0
+
+    // base BM.
 
     //initparam(defv); // modify initparam to read input from stdin only once
     startrun_repeated(); // create another version of this function that reuses loaded data
@@ -562,20 +795,68 @@ int main (int argc, string argv[])
     Global->forcecalctime = 0;
     Global->current_id = 0;
 
+    std::cout << "Now running base BM" << std::endl;
+    const auto base_start0 = high_resolution_clock::now();
+
+    CREATE(SlaveStart<false>, static_cast<void*>(base_assigned_cores.data()), NPROC);
+
+    WAIT_FOR_END(NPROC);
+
+    // std::cout << "AFTER JOIN. ended base bm" << std::endl;
+
+    const auto base_end0 = high_resolution_clock::now();
+    //const auto elapsed_base = duration_cast<milliseconds>(base_end - base_start).count();
+    const auto elapsed_base0 = duration_cast<nanoseconds>(base_end0 - base_start0).count();
+    std::cout << "Ended base BM for cache warming. elapsed time: " << elapsed_base0 << "ns" << std::endl; 
+#endif
+#endif
+     //barrier(Global->Barstart,NPROC);
+
+    //initparam(defv); // modify initparam to read input from stdin only once
+    startrun_repeated(); // create another version of this function that reuses loaded data
+    initoutput(); // no need for modification, can be repeated
+    //tab_init(); // no need to be recalled in the next iteration of barnes computation
+
+    // the following 5 initializations need to be repeated before each iteration of barnes computation
+    Global->tracktime = 0;
+    Global->partitiontime = 0;
+    Global->treebuildtime = 0;
+    Global->forcecalctime = 0;
+    Global->current_id = 0;
+
+    uint64_t total_traffic_diff = 0;
+    const int traffic_i = (const int) TrafficType::Invalidate;
+    const auto traffic_type = static_cast<TrafficType>(traffic_i);
     // cha aware BM.
     std::cout << "Now running cha aware BM" << std::endl;
     //assert(__threads__<__MAX_THREADS__);
     const auto cha_aware_start = high_resolution_clock::now();
 
-    CREATE(SlaveStart<false>, static_cast<void*>(thread_to_core.data() /*base_assigned_cores.data()*/), NPROC);
+    const auto &before_traffic_vals = storeTraffic(traffic_type);
+    CREATE(SlaveStart<false>, static_cast<void*>(/*thread_to_core.data()*/ base_assigned_cores.data()), NPROC);
 
     WAIT_FOR_END(NPROC); 
+    const auto &after_traffic_vals = storeTraffic(traffic_type);
     // std::cout << "AFTER JOIN. ended cha aware bm" << std::endl;
 
     const auto cha_aware_end = high_resolution_clock::now();
-    const auto elapsed_cha_aware = duration_cast<milliseconds>(cha_aware_end - cha_aware_start).count();
-    std::cout << "Ended cha aware BM. elapsed time: " << elapsed_cha_aware << "ms" << std::endl;
+    //const auto elapsed_cha_aware = duration_cast<milliseconds>(cha_aware_end - cha_aware_start).count();
+    const auto elapsed_cha_aware = duration_cast<nanoseconds>(cha_aware_end - cha_aware_start).count();
+    std::cout << "Ended cha aware BM. elapsed time: " << elapsed_cha_aware << "ns" << std::endl;
 //#endif
+
+    assert(before_traffic_vals.size() == after_traffic_vals.size());
+    for (int i = 0; i < before_traffic_vals.size(); ++i)
+    {
+	for (int j = 0; j < before_traffic_vals[i].size(); ++j)
+	{
+		assert(after_traffic_vals[i][j] >= before_traffic_vals[i][j]);
+		total_traffic_diff += (after_traffic_vals[i][j] - before_traffic_vals[i][j]);
+	}
+    } 
+    std::cout << "captured traffic: " << total_traffic_diff << std::endl;
+//#endif
+#if 0
     // base BM.
 
     //initparam(defv); // modify initparam to read input from stdin only once
@@ -597,14 +878,15 @@ int main (int argc, string argv[])
 
     WAIT_FOR_END(NPROC);
 
-    // std::cout << "AFTER JOIN. ended base bm" << std::endl;
+    //std::cout << "AFTER JOIN. ended base bm" << std::endl;
 
     const auto base_end = high_resolution_clock::now();
-    const auto elapsed_base = duration_cast<milliseconds>(base_end - base_start).count();
-    std::cout << "Ended base BM. elapsed time: " << elapsed_base << "ms" << std::endl;
+    //const auto elapsed_base = duration_cast<milliseconds>(base_end - base_start).count();
+    const auto elapsed_base = duration_cast<nanoseconds>(base_end - base_start).count();
+    std::cout << "Ended base BM. elapsed time: " << elapsed_base << "ns" << std::endl;
   
     //std::cout << "latency improv percentage: " << ((elapsed_base - elapsed_cha_aware) / static_cast<double>(elapsed_base)) * 100 << std::endl;
-//#endif
+#endif
     pthread_spin_destroy(&map_spinlock);
     //std::cerr << "after pthread_spin_destroy\n";
     MAIN_END;
@@ -861,6 +1143,7 @@ void startrun()
    }
    else {
       nbody = getiparam("nbody");
+      std::cerr << "nbody: " << nbody << "\n";
       if (nbody < 1) {
 	 error("startrun: absurd nbody\n");
       }

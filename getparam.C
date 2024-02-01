@@ -38,18 +38,29 @@ void initparam(string *defv)
    defaults = defv;
    for(int i = 0; i < 12; i++) {
 	fgets(buf, 128, stdin);
+	//std::cerr << "read buf: " << buf << "\n";
 	size_t n = strlen(buf);
 	if (n > 0 && buf[n - 1] == '\n') {
         	buf[n - 1] = '\0';
    	}
 	leng = strlen(buf) + 1;
+	int idx = i;
+	if(idx > 0 && idx < 3)
+		idx++;
+	else if (idx == 3)
+		idx = 1;
 	if(leng > 1) {
-		inputarray[i] = strcpy(static_cast<char*>(malloc(leng)), buf);
+		inputarray[idx] = strcpy(static_cast<char*>(malloc(leng)), buf);
 	} else {
-		inputarray[i] = strcpy(static_cast<char*>(malloc(1)), "");
+		inputarray[idx] = strcpy(static_cast<char*>(malloc(1)), "");
 	}
 	memset( (void *) buf, '\0', 128);
    }
+#if 0
+    std::cerr << "inputarray:\n";
+    for(int i = 0; i < 12; i++)
+	std::cerr << i << " " << inputarray[i] << "\n";
+#endif
 }
 
 /*
@@ -65,6 +76,7 @@ string getparam(string name)
    //if (defaults == NULL)
       //error("getparam: called before initparam\n");
    i = scanbind(defaults, name);
+   //std::cerr << "in getparam, idx " << i << "\n";
    if (i < 0)
       error("getparam: %s unknown\n", name);
    def = extrvalue(defaults[i]);
