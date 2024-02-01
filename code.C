@@ -630,7 +630,7 @@ int main (int argc, string argv[])
 	  Global->tracktime);
    
    // preprocessing begins here
-#if 0
+//#if 0
    std::cout << "Starting preprocesing algo..." << std::endl;
    const auto algo_start = high_resolution_clock::now();
 
@@ -808,7 +808,7 @@ int main (int argc, string argv[])
     //const auto elapsed_base = duration_cast<milliseconds>(base_end - base_start).count();
     const auto elapsed_base0 = duration_cast<nanoseconds>(base_end0 - base_start0).count();
     std::cout << "Ended base BM for cache warming. elapsed time: " << elapsed_base0 << "ns" << std::endl; 
-#endif
+//#endif
 #endif
      //barrier(Global->Barstart,NPROC);
 
@@ -833,7 +833,7 @@ int main (int argc, string argv[])
     const auto cha_aware_start = high_resolution_clock::now();
 
     const auto &before_traffic_vals = storeTraffic(traffic_type);
-    CREATE(SlaveStart<false>, static_cast<void*>(/*thread_to_core.data()*/ base_assigned_cores.data()), NPROC);
+    CREATE(SlaveStart<false>, static_cast<void*>(thread_to_core.data() /*base_assigned_cores.data()*/), NPROC);
 
     WAIT_FOR_END(NPROC); 
     const auto &after_traffic_vals = storeTraffic(traffic_type);
