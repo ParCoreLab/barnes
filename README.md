@@ -6,6 +6,6 @@ make
 
 sudo ./BARNES < input
 
-#How to run the experiment
+# How to run the experiment
 
 sudo ./input_size_compare.sh
