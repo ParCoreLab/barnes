@@ -605,14 +605,19 @@ int main (int argc, string argv[])
     assert(base_assigned_cores.size() == 28); 
 //#if 0
    std::cerr << "before SlaveStart\n";
+   //const auto base_time_start = high_resolution_clock::now();
    //const auto &before_traffic_vals = storeTraffic(traffic_type);
    CREATE(SlaveStart<true>, static_cast<void*>(base_assigned_cores.data()), NPROC);
 //#endif
    WAIT_FOR_END(NPROC);
+   //const auto base_time_end = high_resolution_clock::now();
    //const auto &after_traffic_vals = storeTraffic(traffic_type);
 
    CLOCK(Global->computeend);
 
+   //const auto elapsed_base_time = duration_cast<nanoseconds>(base_time_end - base_time_start).count();
+
+   //std::cout << "Ended base execution. elapsed time: " << elapsed_base_time << "ns" << std::endl;
    printf("COMPUTEEND    = %12lu\n",Global->computeend);
    printf("COMPUTETIME   = %12lu\n",Global->computeend - Global->computestart);
    printf("TRACKTIME     = %12lu\n",Global->tracktime);
@@ -628,9 +633,9 @@ int main (int argc, string argv[])
 	  ((float)(Global->tracktime-Global->partitiontime-
 		   Global->treebuildtime-Global->forcecalctime))/
 	  Global->tracktime);
-   
+//#endif
+//#if 0   
    // preprocessing begins here
-//#if 0
    std::cout << "Starting preprocesing algo..." << std::endl;
    const auto algo_start = high_resolution_clock::now();
 
@@ -768,7 +773,7 @@ int main (int argc, string argv[])
 
     const auto algo_end = high_resolution_clock::now();
     //std::cout << "Ended preprocesing algo. elapsed time: " << duration_cast<milliseconds>(algo_end - algo_start).count() << "ms" << std::endl;
-    std::cout << "Ended preprocesing algo. elapsed time: " << duration_cast<nanoseconds>(algo_end - algo_start).count() << "ms" << std::endl;
+    std::cout << "Ended preprocesing algo. elapsed time: " << duration_cast<nanoseconds>(algo_end - algo_start).count() << "ns" << std::endl;
 
     int ii = 0;
     for (auto ptr : thread_to_core) {
@@ -779,6 +784,7 @@ int main (int argc, string argv[])
 
     //assert(thread_to_core.size() == NPROC);
     topo.printTopology(); 
+//#endif
 #if 0
 
     // base BM.
@@ -808,8 +814,9 @@ int main (int argc, string argv[])
     //const auto elapsed_base = duration_cast<milliseconds>(base_end - base_start).count();
     const auto elapsed_base0 = duration_cast<nanoseconds>(base_end0 - base_start0).count();
     std::cout << "Ended base BM for cache warming. elapsed time: " << elapsed_base0 << "ns" << std::endl; 
-//#endif
 #endif
+//#endif
+//#if 0
      //barrier(Global->Barstart,NPROC);
 
     //initparam(defv); // modify initparam to read input from stdin only once
@@ -832,11 +839,11 @@ int main (int argc, string argv[])
     //assert(__threads__<__MAX_THREADS__);
     const auto cha_aware_start = high_resolution_clock::now();
 
-    const auto &before_traffic_vals = storeTraffic(traffic_type);
+    //const auto &before_traffic_vals = storeTraffic(traffic_type);
     CREATE(SlaveStart<false>, static_cast<void*>(thread_to_core.data() /*base_assigned_cores.data()*/), NPROC);
 
     WAIT_FOR_END(NPROC); 
-    const auto &after_traffic_vals = storeTraffic(traffic_type);
+    //const auto &after_traffic_vals = storeTraffic(traffic_type);
     // std::cout << "AFTER JOIN. ended cha aware bm" << std::endl;
 
     const auto cha_aware_end = high_resolution_clock::now();
@@ -845,6 +852,7 @@ int main (int argc, string argv[])
     std::cout << "Ended cha aware BM. elapsed time: " << elapsed_cha_aware << "ns" << std::endl;
 //#endif
 
+#if 0
     assert(before_traffic_vals.size() == after_traffic_vals.size());
     for (int i = 0; i < before_traffic_vals.size(); ++i)
     {
@@ -855,7 +863,7 @@ int main (int argc, string argv[])
 	}
     } 
     std::cout << "captured traffic: " << total_traffic_diff << std::endl;
-//#endif
+#endif
 #if 0
     // base BM.
 
