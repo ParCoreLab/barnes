@@ -46,7 +46,7 @@ clean:
 	$(CC) -c $(CFLAGS) $*.cpp
 
 stdinc.h: code.h defs.h util.h vectmath.h load.h code_io.h grav.h getparam.h stdinc.H 
-code.o: code.C stdinc.h cha.h topology.h tile.h constants.h
+code.o: code.C stdinc.h cha.h topology.h tile.h constants.h hash.h
 code_io.o: code_io.C stdinc.h
 getparam.o: getparam.C stdinc.h
 grav.o: grav.C stdinc.h

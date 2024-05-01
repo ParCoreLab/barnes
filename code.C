@@ -85,8 +85,139 @@ MAIN_ENV
 #include "load.h"
 #include "grav.h"
 #include "constants.h"
+#define NTHREADS 28
+//#include "hash.h"
+#define CACHE_LINE_SZ (64)
+#define ALIGN_TO_CACHE_LINE(addr) ((uint64_t)(addr) & (~(CACHE_LINE_SZ-1)))
+#define OFFSET_OF_CACHE_LINE(addr) ((uint64_t)(addr) >> 6)
+#define HASHTABLE_SIZE (100000)
+#define SAMPLING_PERIOD (1000)
+// begin
+//#if 0
+//using namespace std;
+
+class HashTable
+{
+        int INDEX_NUM;    // No. of buckets
+
+        // Pointer to an array containing buckets
+        std::pair<std::atomic<uint32_t>,std::list<std::tuple<long unsigned int, int, std::pair<int, int>>>> *table;
+        public:
+        HashTable(int index_num);  // Constructor
+        ~HashTable();  // Destructor
+
+        // inserts a key into hash table
+        void insertItem(long unsigned int index, long unsigned int cacheLine, int cha);
+
+        bool findItem(long unsigned int index, long unsigned int cacheLine);
+
+        void wait(long unsigned int index);
+
+        void signal(long unsigned int index);
+
+        std::tuple<long unsigned int, int, std::pair<int, int>>& getItem(long unsigned int index, long unsigned int cacheLine);
+
+        // hash function to map values to key
+        long unsigned int hashFunction(long unsigned int cacheLine) {
+                return (cacheLine % INDEX_NUM);
+        }
+
+        void displayHash();
+};
+
+HashTable::HashTable(int index_num)
+{
+        this->INDEX_NUM = index_num;
+        table = new std::pair<std::atomic<uint32_t>,std::list<std::tuple<long unsigned int, int, std::pair<int, int>>>>[INDEX_NUM];
+        for(int i = 0; i < INDEX_NUM; i++)
+                table[i].first = 1;
+}
+
+HashTable::~HashTable()
+{
+        delete[] table;
+}
+
+void HashTable::insertItem(long unsigned int index, long unsigned int cacheLine, int cha)
+{
+        //long unsigned int index = hashFunction(cacheLine);
+        table[index].second.push_back({cacheLine, cha, {0, 0}});
+}
+
+bool HashTable::findItem(long unsigned int index, long unsigned int cacheLine)
+{
+        // get the hash index of key
+        //long unsigned int index = hashFunction(cacheLine);
+
+        auto it = table[index].second.begin();
+        while (it != table[index].second.end())
+        {
+                if (std::get<0>(*it) == cacheLine)
+                        break;
+        }
+
+        // if key is found in hash table, remove it
+        if (it != table[index].second.end())
+                return true;
+        return false;
+}
+//#endif
+
+void HashTable::wait(long unsigned int index)
+{
+        //while(table[index].first <= 0);
+        //table[index].first--;
+        auto oldval = table[index].first.load();
+        while (oldval == 0 || !table[index].first.compare_exchange_strong(oldval, oldval - 1)) {
+           oldval = table[index].first.load();
+           //std::cerr << "in wait, val: " << oldval << "\n";
+        }
+}
+
+void HashTable::signal(long unsigned int index)
+{
+        auto val = table[index].first.fetch_add(1, std::memory_order_seq_cst);
+        //std::cerr << "in signal, val: " << val << "\n";
+}
+
+std::tuple<long unsigned int, int, std::pair<int, int>>& HashTable::getItem(long unsigned int index, long unsigned int cacheLine)
+{
+        // get the hash index of key
+        //long unsigned int index = hashFunction(cacheLine);
+
+        // find the key in (index)th list
+        auto it = table[index].second.begin();
+        while (it != table[index].second.end())
+        {
+                if (std::get<0>(*it) == cacheLine)
+                        break;
+        }
+
+        // if key is found in hash table, remove it
+        if (it != table[index].second.end()) {
+                return *it;//table[index];
+        }
+        std::tuple<long unsigned int, int, std::pair<int, int>> empty_tuple({0, 0, {0, 0}});
+        return empty_tuple;
+}
+
+// function to display hash table
+void HashTable::displayHash() {
+        for (int i = 0; i < INDEX_NUM; i++) {
+                std::cout << i;
+                for (auto x : table[i].second)
+                        //cout << " --> cache line: " << x.first << ", a: " << x.second.first << ", b: " << x.second.second;
+                        std::cout << " --> cache line: " << std::get<0>(x) << ", cha: " << std::get<1>(x) << ", a: " << std::get<2>(x).first << ", b: " << std::get<2>(x).second;
+                std::cout << std::endl;
+        }
+}
+//#endif
+// end
 
 std::map<long, std::multiset<double *>> threadid_addresses_map;
+HashTable comm_map(HASHTABLE_SIZE);
+std::vector<std::vector<std::pair<int, std::unordered_map<int, int>>>> comm_matrix(NTHREADS, std::vector<std::pair<int, std::unordered_map<int, int>>> (NTHREADS, std::pair<int, std::unordered_map<int, int>> {}));
+
 pthread_spinlock_t map_spinlock;
 
 string defv[] = {                 /* DEFAULT PARAMETER VALUES              */
@@ -150,6 +281,156 @@ string defv[] = {                 /* DEFAULT PARAMETER VALUES              */
 #define FDA_BLA 31
 
 #define CACHELINE_SIZE 64
+
+unsigned short rdtsc() {
+        unsigned short c;
+        __asm__("rdtsc\n" : "=a" (c));
+        return c;
+}
+
+thread_local uint64_t sampling_counter = 0;
+thread_local uint64_t next_sampling_iteration = 0;
+
+//int findCha(const double* val);
+int findCha(uint64_t val);
+
+void inc_comm(int tid,
+                //HashTable& comm_map,
+                //std::vector<std::vector<std::pair<int, std::unordered_map<int, int>>>>& comm_matrix,
+                //const int& cha,
+                const long unsigned int& addr)
+{
+//#if 0 
+        if(sampling_counter++ < next_sampling_iteration) {
+                //cerr << "inc_comm discarded\n";
+                return;
+        }
+//#endif
+        next_sampling_iteration = SAMPLING_PERIOD - 256 + rdtsc() % 256 + next_sampling_iteration;
+//#endif
+#if 0
+        if(tid == 0)
+                cerr << "next_sampling_iteration: " << next_sampling_iteration << endl;
+#endif  
+        uint64_t line = OFFSET_OF_CACHE_LINE(addr);
+        uint64_t hash_idx = comm_map.hashFunction(line);
+        int sh = 1;
+        int a;
+        int b;
+	int cha;
+        
+        comm_map.wait(hash_idx);
+        if(!comm_map.findItem(hash_idx, line))  {
+		cha = findCha(line);
+                comm_map.insertItem(hash_idx, line, cha);
+        }
+        std::tuple<long unsigned int, int, std::pair<int, int>>& comm_map_element = comm_map.getItem(hash_idx, line);
+	cha = a = std::get<1>(comm_map_element);
+        //a = comm_map_element.second.first;
+	a = std::get<2>(comm_map_element).first;   
+        //b = comm_map_element.second.second;
+        b = std::get<2>(comm_map_element).second;
+        
+        if (a == 0 && b == 0)
+                sh = 0;
+        if (a != 0 && b != 0)
+                sh = 2;
+        switch (sh) {
+                case 0: // no one accessed line before, store accessing thread in pos 0
+                        //comm_map[line].first = tid+1;
+                        //comm_map[line].first = tid+1;
+                        //comm_map_element.second.first = tid+1;
+                        std::get<2>(comm_map_element).first = tid+1;
+                        //mutex_map[hash_idx].unlock();
+                        comm_map.signal(hash_idx);
+                        //mtx->unlock();
+                        //global_mtx.unlock();
+                        //comm_map[line].first = tid+1;
+                        break;
+
+                case 1: // one previous access => needs to be in pos 0
+                        // if (a != tid+1) {
+                        //inc_comm(tid, a);
+                        //if (tid!=a-1) {
+                        //      if(tid < a-1) {
+                        //comm_map[line].first = tid+1;
+                        //comm_map_element.second.first = tid+1;
+                        std::get<2>(comm_map_element).first = tid+1;
+                        //comm_map[line].second = a;
+                        //comm_map_element.second.second = a;
+                        std::get<2>(comm_map_element).second = a;
+                        //mutex_map[hash_idx].unlock();
+                        //comm_map.signal(hash_idx);
+                        //mtx->unlock();
+                        //global_mtx.unlock();
+                        comm_matrix[tid][a-1].first++;
+                        comm_matrix[tid][a-1].second[cha]++;
+			comm_map.signal(hash_idx);
+                        //      } else {
+                        //              comm_matrix[a-1][tid].first++;
+                        //              comm_matrix[a-1][tid].second[cha]++;
+                        //      }
+                        //}
+                        //#pragma omp critical
+                        //{
+                        //comm_map[line].first = tid+1;
+                        //comm_map[line].second = a;
+                        //}
+                        // }
+                        break;
+                        
+                case 2: // two previous accesses
+                        // if (a != tid+1 && b != tid+1) {
+                        //comm_map[line].first = tid+1;
+                        //comm_map_element.second.first = tid+1;
+                        std::get<2>(comm_map_element).first = tid+1;
+                        //comm_map[line].second = a;
+                        //comm_map_element.second.second = a;
+                        std::get<2>(comm_map_element).second = a;
+                        //mutex_map[hash_idx].unlock();
+                        //comm_map.signal(hash_idx);
+                        //mtx->unlock();
+                        //global_mtx.unlock();
+                        if (tid!=a-1) {
+                                //if(tid < a-1) {
+                                comm_matrix[tid][a-1].first++;
+                                comm_matrix[tid][a-1].second[cha]++;
+                                //} else {
+                                //      comm_matrix[a-1][tid].first++;
+                                //      comm_matrix[a-1][tid].second[cha]++; 
+                                //}
+                        }
+                        if (tid!=b-1) {
+                                //if(tid < b-1) {
+                                comm_matrix[tid][b-1].first++;
+                                comm_matrix[tid][b-1].second[cha]++;
+                                //} else {
+                                //      comm_matrix[b-1][tid].first++;
+                                //      comm_matrix[b-1][tid].second[cha]++;
+                                //}
+                        }
+			comm_map.signal(hash_idx);
+                        //#pragma omp critical
+                        //{
+                        //comm_map[line].first = tid+1;
+                        //comm_map[line].second = a;
+                        //}
+                        // } else if (a == tid+1) {
+                        //  inc_comm(tid, b);
+                        // } else if (b == tid+1) {
+                        //  inc_comm(tid, a);
+                        //  commmap[line].first = tid+1;
+                        //  commmap[line].second = a;
+                        // }
+
+                        break;
+        }
+        //mtx->unlock();                        
+        //#endif
+        //__sync_synchronize();
+        //#endif
+        //std::cerr << "This part is executed 1\n"; 
+}
 
 //static const long CHA_MSR_PMON_CTRL_BASE = 0x0E01L;
 
@@ -474,7 +755,7 @@ static long Direction_Sequence[NUM_DIRECTIONS][NSUB] =
  /* FDA_BLA */
 };
 
-int findCha(const double* val)
+int findCha(/*const double**/uint64_t val)
 {
   // this part is changed wrt fluidanimate.
     return findCHAByHashing(reinterpret_cast<uintptr_t>(val)); // AYDIN: this is not &val, right?
@@ -640,6 +921,8 @@ int main (int argc, string argv[])
    const auto algo_start = high_resolution_clock::now();
 
    assert(NPROC > 1);  // below algo depends on this. we will find thread pairs.
+
+#if 0
    auto head = threadid_addresses_map.begin();
    std::cout << "here 1\n";
    std::map<long, std::multiset<double *>>::iterator tail;
@@ -690,9 +973,11 @@ int main (int argc, string argv[])
    int mapped_thread_count = 0;
    auto it = total_cha_freq_count_t1_t2.begin();
    auto it1 = total_comm_count_t1_t2.begin();
+#endif
    std::vector<int> thread_to_core(NPROC, -1);
 
    auto topo = Topology(cha_core_map, CAPID6);
+#if 0
    std::vector<Tile> mapped_tiles;
 
    // SPDLOG_TRACE("~~~~~~~~~~~~~~~~");
@@ -769,7 +1054,7 @@ int main (int argc, string argv[])
         it1++;
     }
     // end
-
+#endif
 
     const auto algo_end = high_resolution_clock::now();
     //std::cout << "Ended preprocesing algo. elapsed time: " << duration_cast<milliseconds>(algo_end - algo_start).count() << "ms" << std::endl;
@@ -816,7 +1101,7 @@ int main (int argc, string argv[])
     std::cout << "Ended base BM for cache warming. elapsed time: " << elapsed_base0 << "ns" << std::endl; 
 #endif
 //#endif
-//#if 0
+#if 0
      //barrier(Global->Barstart,NPROC);
 
     //initparam(defv); // modify initparam to read input from stdin only once
@@ -850,7 +1135,7 @@ int main (int argc, string argv[])
     //const auto elapsed_cha_aware = duration_cast<milliseconds>(cha_aware_end - cha_aware_start).count();
     const auto elapsed_cha_aware = duration_cast<nanoseconds>(cha_aware_end - cha_aware_start).count();
     std::cout << "Ended cha aware BM. elapsed time: " << elapsed_cha_aware << "ns" << std::endl;
-//#endif
+#endif
 
 #if 0
     assert(before_traffic_vals.size() == after_traffic_vals.size());
@@ -1552,20 +1837,25 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
 	 if constexpr (is_preprocessing)
       	 { 
         	pthread_spin_lock(&map_spinlock);
-
+#if 0
         	threadid_addresses_map[ProcessId].insert(
           		reinterpret_cast<double*>(
             			reinterpret_cast<uintptr_t>(&(CellLock->CL)) &
             				~(CACHELINE_SIZE - 1)
           		)
         	);
+#endif
+		inc_comm(ProcessId, reinterpret_cast<uintptr_t>(&(CellLock->CL)) & ~(CACHELINE_SIZE - 1));
 
+#if 0
                 threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
                                 reinterpret_cast<uintptr_t>(&(((cellptr) mynode)->seqnum)) &
                                         ~(CACHELINE_SIZE - 1)
                         )
                 );
+#endif
+		inc_comm(ProcessId, reinterpret_cast<uintptr_t>(&(((cellptr) mynode)->seqnum)) & ~(CACHELINE_SIZE - 1));
                 pthread_spin_unlock(&map_spinlock);
       	}
          if (*qptr == NULL) {
@@ -1583,18 +1873,24 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
          {
                 pthread_spin_lock(&map_spinlock);
 
+#if 0
                 threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
                                 reinterpret_cast<uintptr_t>(&(CellLock->CL)) &
                                         ~(CACHELINE_SIZE - 1)
                         )
                 );
+#endif
+		inc_comm(ProcessId, reinterpret_cast<uintptr_t>(&(CellLock->CL)) & ~(CACHELINE_SIZE - 1));
+#if 0
 		threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
                                 reinterpret_cast<uintptr_t>(&(((cellptr) mynode)->seqnum)) &
                                         ~(CACHELINE_SIZE - 1)
                         )
                 );
+#endif
+		inc_comm(ProcessId, reinterpret_cast<uintptr_t>(&(((cellptr) mynode)->seqnum)) & ~(CACHELINE_SIZE - 1));		
                 pthread_spin_unlock(&map_spinlock);
         }
          /* unlock the parent cell */
@@ -1606,18 +1902,24 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
          {
                 pthread_spin_lock(&map_spinlock);
 
+#if 0
                 threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
                                 reinterpret_cast<uintptr_t>(&(CellLock->CL)) &
                                         ~(CACHELINE_SIZE - 1)
                         )
                 );
+#endif
+		inc_comm(ProcessId, reinterpret_cast<uintptr_t>(&(CellLock->CL)) & ~(CACHELINE_SIZE - 1));
+#if 0
 		threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
                                 reinterpret_cast<uintptr_t>(&(((cellptr) mynode)->seqnum)) &
                                         ~(CACHELINE_SIZE - 1)
                         )
                 );
+#endif
+		inc_comm(ProcessId, reinterpret_cast<uintptr_t>(&(((cellptr) mynode)->seqnum)) & ~(CACHELINE_SIZE - 1));
                 pthread_spin_unlock(&map_spinlock);
          }
          /* lock the parent cell */
@@ -1640,18 +1942,24 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
          {
                 pthread_spin_lock(&map_spinlock);
 
+#if 0
                 threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
                                 reinterpret_cast<uintptr_t>(&(CellLock->CL)) &
                                         ~(CACHELINE_SIZE - 1)
                         )
                 );
+#endif
+		inc_comm(ProcessId, reinterpret_cast<uintptr_t>(&(CellLock->CL)) & ~(CACHELINE_SIZE - 1));
+#if 0
 		threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
                                 reinterpret_cast<uintptr_t>(&(((cellptr) mynode)->seqnum)) &
                                         ~(CACHELINE_SIZE - 1)
                         )
                 );
+#endif
+		inc_comm(ProcessId, reinterpret_cast<uintptr_t>(&(((cellptr) mynode)->seqnum)) & ~(CACHELINE_SIZE - 1));
                 pthread_spin_unlock(&map_spinlock);
         }
          /* unlock the node           */
@@ -1762,12 +2070,15 @@ cellptr makecell(long ProcessId)
          {
                 pthread_spin_lock(&map_spinlock);
 
+#if 0
                 threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
                                 reinterpret_cast<uintptr_t>(&(c->seqnum)) &
                                         ~(CACHELINE_SIZE - 1)
                         )
                 );
+#endif
+		inc_comm(ProcessId, reinterpret_cast<uintptr_t>(&(c->seqnum)) & ~(CACHELINE_SIZE - 1));
                 pthread_spin_unlock(&map_spinlock);
         } 
    Type(c) = CELL;
@@ -1850,13 +2161,15 @@ void hackcofm(long ProcessId)
 	    if constexpr (is_preprocessing)
             {
                 pthread_spin_lock(&map_spinlock);
-
+#if 0
                 threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
                                 reinterpret_cast<uintptr_t>(&(Pos(q))) &
                                         ~(CACHELINE_SIZE - 1)
                         )
                 );
+#endif
+		inc_comm(ProcessId, reinterpret_cast<uintptr_t>(&(Pos(q))) & ~(CACHELINE_SIZE - 1));
                 pthread_spin_unlock(&map_spinlock);
            }
 
@@ -2156,13 +2469,15 @@ bool subdivp(register nodeptr p, real dsq, long ProcessId)
    if constexpr (is_preprocessing)
    {
    	pthread_spin_lock(&map_spinlock);
-
+#if 0
    	threadid_addresses_map[ProcessId].insert(
         reinterpret_cast<double*>(
         	reinterpret_cast<uintptr_t>(&(Pos(p))) &
              		~(CACHELINE_SIZE - 1)
                 )
         );
+#endif
+	inc_comm(ProcessId, reinterpret_cast<uintptr_t>(&(Pos(p))) & ~(CACHELINE_SIZE - 1));
 	pthread_spin_unlock(&map_spinlock);
    }
    DOTVP(Local[ProcessId].drsq, Local[ProcessId].dr, Local[ProcessId].dr);
