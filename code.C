@@ -91,7 +91,7 @@ MAIN_ENV
 #define ALIGN_TO_CACHE_LINE(addr) ((uint64_t)(addr) & (~(CACHE_LINE_SZ-1)))
 #define OFFSET_OF_CACHE_LINE(addr) ((uint64_t)(addr) >> 6)
 #define HASHTABLE_SIZE (100000)
-#define SAMPLING_PERIOD (1000)
+#define SAMPLING_PERIOD (100000)
 // begin
 //#if 0
 //using namespace std;
@@ -763,7 +763,7 @@ int findCha(/*const double**/uint64_t val)
 
 int getMostAccessedCHA(int tid1,
                        int tid2,
-                       std::multiset<std::tuple<int, int, int, int>, std::greater<>> ranked_cha_access_count_per_pair,
+                       std::multiset<std::tuple<int, int, int, int>, std::greater<std::tuple<int, int, int, int>>> ranked_cha_access_count_per_pair,
                        Topology topo)
 {
     int max = 0;
@@ -886,19 +886,19 @@ int main (int argc, string argv[])
     assert(base_assigned_cores.size() == 28); 
 //#if 0
    std::cerr << "before SlaveStart\n";
-   //const auto base_time_start = high_resolution_clock::now();
+   const auto profiled_base_time_start = high_resolution_clock::now();
    //const auto &before_traffic_vals = storeTraffic(traffic_type);
    CREATE(SlaveStart<true>, static_cast<void*>(base_assigned_cores.data()), NPROC);
 //#endif
    WAIT_FOR_END(NPROC);
-   //const auto base_time_end = high_resolution_clock::now();
+   const auto profiled_base_time_end = high_resolution_clock::now();
    //const auto &after_traffic_vals = storeTraffic(traffic_type);
 
    CLOCK(Global->computeend);
 
-   //const auto elapsed_base_time = duration_cast<nanoseconds>(base_time_end - base_time_start).count();
+   const auto elapsed_profiled_base_time = duration_cast<nanoseconds>(profiled_base_time_end - profiled_base_time_start).count();
 
-   //std::cout << "Ended base execution. elapsed time: " << elapsed_base_time << "ns" << std::endl;
+   std::cout << "Ended base execution. elapsed time: " << elapsed_profiled_base_time << "ns" << std::endl;
    printf("COMPUTEEND    = %12lu\n",Global->computeend);
    printf("COMPUTETIME   = %12lu\n",Global->computeend - Global->computestart);
    printf("TRACKTIME     = %12lu\n",Global->tracktime);
@@ -917,11 +917,13 @@ int main (int argc, string argv[])
 //#endif
 //#if 0   
    // preprocessing begins here
-   std::cout << "Starting preprocesing algo..." << std::endl;
-   const auto algo_start = high_resolution_clock::now();
+   //std::cout << "Starting preprocesing algo..." << std::endl;
+   //const auto algo_start = high_resolution_clock::now();
 
    assert(NPROC > 1);  // below algo depends on this. we will find thread pairs.
 
+   std::cout << "Starting preprocesing algo..." << std::endl;
+   const auto algo_start = high_resolution_clock::now();
 #if 0
    auto head = threadid_addresses_map.begin();
    std::cout << "here 1\n";
@@ -974,88 +976,93 @@ int main (int argc, string argv[])
    auto it = total_cha_freq_count_t1_t2.begin();
    auto it1 = total_comm_count_t1_t2.begin();
 #endif
-   std::vector<int> thread_to_core(NPROC, -1);
 
-   auto topo = Topology(cha_core_map, CAPID6);
-#if 0
-   std::vector<Tile> mapped_tiles;
+    //const auto algo_end = high_resolution_clock::now();
+    //std::cout << "Ended preprocesing algo. elapsed time: " << duration_cast<milliseconds>(algo_end - algo_start).count() << "ms" << std::endl;
+    //std::cout << "Ended preprocesing algo. elapsed time: " << duration_cast<nanoseconds>(algo_end - algo_start).count() << "ns" << std::endl;
 
-   // SPDLOG_TRACE("~~~~~~~~~~~~~~~~");
-    //  fprintf(stderr, "before thread mapping creation\n");
-    
-    // start
-    // it = ranked_cha_access_count_per_pair.begin();
-    while (mapped_tiles.size() < NPROC &&
-           /*it != ranked_cha_access_count_per_pair.end()*/ it1 != total_comm_count_t1_t2.end()) {
-        // std::pair<int, int> tid_pair(std::get<2>(*it), std::get<3>(*it));
-        std::pair<int, int> tid_pair(std::get<1>(*it1), std::get<2>(*it1));
-        if (thread_to_core[tid_pair.first] == -1 && thread_to_core[tid_pair.second] == -1) {
-            // SPDLOG_TRACE("cha with max access: {}", std::get<1>(*it));
-            int cha_id = getMostAccessedCHA(tid_pair.first, tid_pair.second, total_cha_freq_count_t1_t2, topo);
-            if (cha_id == -1) {
-                // SPDLOG_INFO("error: cha is -1");
+
+    std::multiset<std::tuple<int, int, int, int>, greater<std::tuple<int, int, int, int>>> ranked_cha_access_count_per_pair;
+    std::multiset<std::tuple<int, int, int>, greater<std::tuple<int, int, int>>> ranked_communication_count_per_pair;
+
+    for (int i = 0; i < comm_matrix.size(); ++i)
+        {
+                for (int j = i + 1; j < comm_matrix[i].size(); ++j)
+                {
+                        if(comm_matrix[i][j].first > 0 || comm_matrix[j][i].first > 0) {
+				
+                                ranked_communication_count_per_pair.insert({comm_matrix[i][j].first + comm_matrix[j][i].first, i, j});
+				for (int k = 0; k < NPROC; k++)
+                        	{
+					if(comm_matrix[i][j].second[k] > 0 || comm_matrix[j][i].second[k] > 0)
+						ranked_cha_access_count_per_pair.insert({comm_matrix[i][j].second[k] + comm_matrix[j][i].second[k], k, i, j});
+				}
+			}
+                }
+        }
+
+    int mapped_thread_count = 0;
+    auto it = ranked_cha_access_count_per_pair.begin();
+    auto it1 = ranked_communication_count_per_pair.begin();
+    std::vector<int> thread_to_core(NPROC, -1);
+    auto topo = Topology(cha_core_map, CAPID6);
+    std::vector<Tile> mapped_tiles;
+
+    while (mapped_tiles.size() < NPROC && it1 != ranked_communication_count_per_pair.end())
+        {
+                // std::pair<int, int> tid_pair(std::get<2>(*it), std::get<3>(*it));
+                std::pair<int, int> tid_pair(std::get<1>(*it1), std::get<2>(*it1));
+                if (thread_to_core[tid_pair.first] == -1 || thread_to_core[tid_pair.second] == -1)
+                {
+                        //SPDLOG_INFO("thread {} and thread {} has {} communication count", tid_pair.first, tid_pair.second, std::get<0>(*it1));
+                        int cha_id = getMostAccessedCHA(tid_pair.first, tid_pair.second, ranked_cha_access_count_per_pair, topo);
+                        if (cha_id == -1)
+                        {
+                                //SPDLOG_INFO("error: cha is -1");
+                                it1++;
+                                continue;
+                        }
+                        // auto tile = topo.getTile(std::get<1>(*it));
+                        auto tile = topo.getTile(cha_id);
+                        //SPDLOG_TRACE("cha {}, is colocated with core {}", cha_id, tile.core);
+                        if (thread_to_core[tid_pair.first] == -1)
+                        {
+                                // SPDLOG_INFO("fetching a tile closest to tile with cha {} and core {}, cha supposed to be {}", tile.cha, tile.core, std::get<1>(*it));
+                                auto closest_tile = topo.getClosestTile(tile, mapped_tiles);
+                                // auto closest_tile = topo.getClosestTilewithThreshold(tile, mapped_tiles);
+                                //SPDLOG_TRACE("* closest _available_ core to cha {} is: {}", tile.cha, closest_tile.core);
+                                mapped_tiles.push_back(closest_tile);
+                                thread_to_core[tid_pair.first] = closest_tile.core;
+                                //SPDLOG_TRACE("assigned thread with id {} to core {}", tid_pair.first, closest_tile.core);
+                        }
+
+                        if (thread_to_core[tid_pair.second] == -1)
+                        {
+                                // SPDLOG_INFO("fetching a tile closest to tile with cha {} and core {}, cha supposed to be {}", tile.cha, tile.core, std::get<1>(*it));
+                                auto closest_tile = topo.getClosestTile(tile, mapped_tiles);
+                                // auto closest_tile = topo.getClosestTilewithThreshold(tile, mapped_tiles);
+                                //SPDLOG_TRACE("# closest _available_ core to cha {} is: {}", tile.cha, closest_tile.core);
+                                mapped_tiles.push_back(closest_tile);
+                                thread_to_core[tid_pair.second] = closest_tile.core;
+                                //SPDLOG_TRACE("assigned thread with id {} to core {}", tid_pair.second, closest_tile.core);
+                        }
+                }
+
                 it1++;
-                continue;
-            }
-            // auto tile = topo.getTile(std::get<1>(*it));
-            auto tile = topo.getTile(cha_id);
-            // SPDLOG_TRACE("cha {}, is colocated with core {}", cha_id, tile.core);
-            //if (thread_to_core[tid_pair.first] == -1)
-            {
-                // SPDLOG_INFO("fetching a tile closest to tile with cha {} and core {}, cha supposed to be {}",
-                // tile.cha, tile.core, std::get<1>(*it));
-                auto closest_tile = topo.getClosestTile(tile, mapped_tiles);
-                // auto closest_tile = topo.getClosestTilewithThreshold(tile, mapped_tiles);
-                // SPDLOG_TRACE("* closest _available_ core to cha {} is: {}", tile.cha, closest_tile.core);
-                mapped_tiles.push_back(closest_tile);
-                thread_to_core[tid_pair.first] = closest_tile.core;
-                // SPDLOG_TRACE("assigned thread with id {} to core {}", tid_pair.first, closest_tile.core);
-            }
-#if 0
-            else
-            {
-                SPDLOG_TRACE("--> Already assigned thread with id {} to core {}, skipping it.", tid_pair.first, thread_to_core[tid_pair.first]);
-            }
-#endif
-
-            //if (thread_to_core[tid_pair.second] == -1)
-            {
-                // SPDLOG_INFO("fetching a tile closest to tile with cha {} and core {}, cha supposed to be {}",
-                // tile.cha, tile.core, std::get<1>(*it));
-                auto closest_tile = topo.getClosestTile(tile, mapped_tiles);
-                // auto closest_tile = topo.getClosestTilewithThreshold(tile, mapped_tiles);
-                // SPDLOG_TRACE("# closest _available_ core to cha {} is: {}", tile.cha, closest_tile.core);
-                mapped_tiles.push_back(closest_tile);
-                thread_to_core[tid_pair.second] = closest_tile.core;
-                // SPDLOG_TRACE("assigned thread with id {} to core {}", tid_pair.second, closest_tile.core);
-            }
-
-#if 0
-            else
-            {
-                SPDLOG_TRACE("--> Already assigned thread with id {} to core {}, skipping it.", tid_pair.second, thread_to_core[tid_pair.second]);
-            }
-#endif
         }
-        //#if 0
-        else if (thread_to_core[tid_pair.first] == -1) {
-            auto tile = topo.getTileByCore(thread_to_core[tid_pair.second]);
-            auto closest_tile = topo.getClosestTile(tile, mapped_tiles);
-            mapped_tiles.push_back(closest_tile);
-            thread_to_core[tid_pair.first] = closest_tile.core;
-        } else if (thread_to_core[tid_pair.second] == -1) {
-            auto tile = topo.getTileByCore(thread_to_core[tid_pair.first]);
-            auto closest_tile = topo.getClosestTile(tile, mapped_tiles);
-            mapped_tiles.push_back(closest_tile);
-            thread_to_core[tid_pair.second] = closest_tile.core;
+       
+	for (int i = 0; i < NPROC; i++) 
+        {
+                //thread_to_core[i] = i;
+                std::vector<int>::iterator it =
+                        std::find(thread_to_core.begin(), thread_to_core.end(), i);
+                if (it == thread_to_core.end())
+                {
+                        std::vector<int>::iterator it1 =
+                                std::find(thread_to_core.begin(), thread_to_core.end(), -1);
+                        *it1 = i;
+                }
         }
-        //#endif
-
-        it1++;
-    }
-    // end
-#endif
-
     const auto algo_end = high_resolution_clock::now();
     //std::cout << "Ended preprocesing algo. elapsed time: " << duration_cast<milliseconds>(algo_end - algo_start).count() << "ms" << std::endl;
     std::cout << "Ended preprocesing algo. elapsed time: " << duration_cast<nanoseconds>(algo_end - algo_start).count() << "ns" << std::endl;
@@ -1149,7 +1156,7 @@ int main (int argc, string argv[])
     } 
     std::cout << "captured traffic: " << total_traffic_diff << std::endl;
 #endif
-#if 0
+//#if 0
     // base BM.
 
     //initparam(defv); // modify initparam to read input from stdin only once
@@ -1179,7 +1186,7 @@ int main (int argc, string argv[])
     std::cout << "Ended base BM. elapsed time: " << elapsed_base << "ns" << std::endl;
   
     //std::cout << "latency improv percentage: " << ((elapsed_base - elapsed_cha_aware) / static_cast<double>(elapsed_base)) * 100 << std::endl;
-#endif
+//#endif
     pthread_spin_destroy(&map_spinlock);
     //std::cerr << "after pthread_spin_destroy\n";
     MAIN_END;
