@@ -27,6 +27,18 @@ void * cha_aware_malloc(size_t size) {
 	return allocated_address;
 }
 
+void * cha_aware_memalign(size_t alignment, size_t size) {
+	uint64_t allocated_address = (uint64_t) (&data[allocation_offset]);
+	while((allocated_address % alignment) != 0) {
+		allocation_offset++;
+		allocated_address = (uint64_t) (&data[allocation_offset]);
+	}
+        assert(allocation_offset + size < NUM);
+        void * returned_address = reinterpret_cast<void*>(&data[allocation_offset]);
+        allocation_offset += size;
+        return returned_address;
+}
+
 uint8_t cha_of_element(void* offset) {
 	assert((uint64_t) offset - (uint64_t) data < NUM);
         uint8_t * located_address = reinterpret_cast<uint8_t*>((uint64_t) offset+NUM);
@@ -231,6 +243,11 @@ int main() {
     for(int i = 0; i < 8; i++)
     	assert(cha_of_element((void *) &array1[i]) == findCHAByHashing(uintptr_t(&array1[i]), base_sequence_28_skx));
     std::cout << "cha assert for cha_aware_malloc success 1." << std::endl;
+
+   int *array2 = reinterpret_cast<int*>(cha_aware_memalign(64, 8 * sizeof(int)));
+    for(int i = 0; i < 8; i++)
+        assert(cha_of_element((void *) &array2[i]) == findCHAByHashing(uintptr_t(&array2[i]), base_sequence_28_skx));
+    std::cout << "cha assert for cha_aware_memalign success 2." << std::endl;
    // std::cout << "diff all: " << elapsed_func_all / static_cast<double>(elapsed_shm) << std::endl;
 
 #if 0

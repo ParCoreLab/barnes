@@ -76,15 +76,17 @@ MAIN_ENV
 #include <bits/stdc++.h>
 #include <unordered_map>
 #include <fcntl.h>
+#include <sys/mman.h>
 
 #define global  /* nada */
 
 #include "stdinc.h"
-#include "cha.h"
+//#include "cha.h"
 #include "topology.h"
 #include "load.h"
 #include "grav.h"
 #include "constants.h"
+#include "protocol.h"
 
 std::map<long, std::multiset<double *>> threadid_addresses_map;
 pthread_spinlock_t map_spinlock;
@@ -160,6 +162,44 @@ enum class TrafficType
 	Acknowledge,
 	Invalidate
 };
+
+char *data;
+uintptr_t allocation_offset = 0;
+int shared_mem_fd;
+
+int getCoreCount() { return static_cast<int>(sysconf(_SC_NPROCESSORS_ONLN)); }
+
+void * cha_aware_malloc(size_t size) {
+        assert(allocation_offset + size < NUM);
+        void * allocated_address = reinterpret_cast<void*>(&data[allocation_offset]);
+        allocation_offset += size;
+        return allocated_address;
+}
+
+uint8_t cha_of_element(void* offset) {
+        assert((uint64_t) offset - (uint64_t) data < NUM);
+        uint8_t * located_address = reinterpret_cast<uint8_t*>((uint64_t) offset+NUM);
+        return *located_address;
+}
+
+void initialize_shared_memory() {
+        shared_mem_fd = shm_open(NAME/*"/dev/shm/shared_mem"*/, O_RDONLY, 0666);
+        if (shared_mem_fd < 0) {
+                perror("shm_open()");
+                return;
+        }
+
+        data = static_cast<char *const>(mmap(nullptr, SIZE, PROT_READ, MAP_SHARED, shared_mem_fd, 0));
+        if (data == MAP_FAILED) {
+                perror("mmap failed");
+                std::exit(EXIT_FAILURE);
+        }
+        uint64_t holder = 0;
+        for (int i = 0; i < NUM; ++i) {
+                holder += (char) data[i];
+        }
+        std::cerr << holder << "\n";
+}
 
 std::string enumToStr(TrafficType traffic_type)
 {
@@ -474,11 +514,13 @@ static long Direction_Sequence[NUM_DIRECTIONS][NSUB] =
  /* FDA_BLA */
 };
 
+#if 0
 int findCha(const double* val)
 {
   // this part is changed wrt fluidanimate.
     return findCHAByHashing(reinterpret_cast<uintptr_t>(val)); // AYDIN: this is not &val, right?
 }
+#endif
 
 int getMostAccessedCHA(int tid1,
                        int tid2,
@@ -566,6 +608,12 @@ int main (int argc, string argv[])
    startrun(); // create another version of this function that reuses loaded data
    initoutput(); // no need for modification, can be repeated
    tab_init(); // no need to be recalled in the next iteration of barnes computation
+   initialize_shared_memory();
+
+   int *array1 = reinterpret_cast<int*>(cha_aware_malloc(8 * sizeof(int)));
+    for(int i = 0; i < 8; i++)
+        assert(cha_of_element((void *) &array1[i]) == findCHAByHashing(uintptr_t(&array1[i]), base_sequence_28_skx));
+    std::cout << "cha assert for cha_aware_malloc success 1." << std::endl;
 
    // the following 5 initializations need to be repeated before each iteration of barnes computation
    Global->tracktime = 0;
@@ -664,6 +712,7 @@ int main (int argc, string argv[])
 	    std::unordered_map<int, int> cha_freq_map;
 	    
 	    // this part is changed wrt fluidanimate.
+#if 0
             for(const double* common_addr : common_addresses) {
               ++cha_freq_map[findCha(common_addr)];
             }
@@ -674,6 +723,7 @@ int main (int argc, string argv[])
             }
 
 	    total_comm_count_t1_t2.insert({common_addresses.size(), t1, t2});
+#endif
 	    // pairing_addresses[{t1, t2}] = common_addresses; // pairing is not used at the moment. here just for clarity.
 	    
 	    ++tail;
