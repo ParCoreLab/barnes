@@ -17,6 +17,100 @@ using std::chrono::milliseconds;
 using std::chrono::microseconds;
 using std::chrono::nanoseconds;
 
+#define NDIM 3L
+#define NSUB (1 << NDIM)
+
+typedef struct _node {
+   long type;                 /* code for node type: body or cell */
+   double mass;                  /* total mass of node */
+   double pos[NDIM];                 /* position of node */
+   long cost;                   /* number of interactions computed */
+   long level;
+   struct _node *parent;       /* ptr to parent of this node in tree */
+   long child_num;              /* Index that this node should be put
+                                  at in parent cell */
+} node;
+
+typedef node* nodeptr;
+typedef struct _cell* cellptr;
+
+typedef struct _cell {
+   long type;
+   double mass;                  /* total mass of cell */
+   double pos[NDIM];                 /* cm. position of cell */
+   long cost;                   /* number of interactions computed */
+   long level;
+   cellptr parent;
+   long child_num;              /* Index [0..8] that this node should be put */
+   long processor;              /* Used by partition code */
+   struct _cell *next, *prev;    /* Used in the partition array */
+   long seqnum;
+#ifdef QUADPOLE
+   double quad[NDIM][NDIM];                /* quad. moment of cell */
+#endif
+   volatile long done;          /* flag to tell when the c.of.m is ready */
+   nodeptr subp[NSUB];         /* descendents of cell */
+} cell;
+
+struct GlobalMemory  {  /* all this info is for the whole system */
+    long n2bcalc;       /* total number of body/cell interactions  */
+    long nbccalc;       /* total number of body/body interactions  */
+    long selfint;       /* number of self interactions             */
+    double mtot;         /* total mass of N-body system             */
+    double etot[3];      /* binding, kinetic, potential energy      */
+    double keten[NDIM][NDIM];      /* kinetic energy tensor                   */
+    double peten[NDIM][NDIM];      /* potential energy tensor                 */
+    double cmphase[2][NDIM]; /* center of mass coordinates and velocity */
+    double amvec[NDIM];      /* angular momentum vector                 */
+    cellptr G_root;    /* root of the whole tree                  */
+    double rmin[NDIM];       /* lower-left corner of coordinate box     */
+    double min[NDIM];        /* temporary lower-left corner of the box  */
+    double max[NDIM];        /* temporary upper right corner of the box */
+    double rsize;        /* side-length of integer coordinate box   */
+    //BARDEC(Barrier)   /* barrier at the beginning of stepsystem  */
+    struct {
+        pthread_mutex_t mutex;
+        pthread_cond_t  cv;
+        unsigned long   counter;
+        unsigned long   cycle;
+    } Barrier;
+    //LOCKDEC(CountLock) /* Lock on the shared variables            */
+    pthread_mutex_t CountLock;
+    //LOCKDEC(NcellLock) /* Lock on the counter of array of cells for loadtree */
+    pthread_mutex_t NcellLock;
+    //LOCKDEC(NleafLock)/* Lock on the counter of array of leaves for loadtree */
+    pthread_mutex_t NleafLock;
+    //LOCKDEC(io_lock)
+    pthread_mutex_t io_lock;
+    unsigned long createstart,createend,computestart,computeend;
+    unsigned long trackstart, trackend, tracktime;
+    unsigned long partitionstart, partitionend, partitiontime;
+    unsigned long treebuildstart, treebuildend, treebuildtime;
+    unsigned long forcecalcstart, forcecalcend, forcecalctime;
+    long current_id;
+    volatile long k; /*for memory allocation in code.C */
+};
+
+struct dummy_struct {
+	long a;
+	long b;
+	long c;
+	long d;
+};
+//define(LOCKDEC, `pthread_mutex_t ($1);')
+
+#if 0
+struct {
+        pthread_mutex_t mutex;
+        pthread_cond_t  cv;
+        unsigned long   counter;
+        unsigned long   cycle;
+} ($1);
+#endif
+struct GlobalMemory *Global;
+struct dummy_struct *dummy;
+int *dummy_arr;
+
 char *data;
 uintptr_t allocation_offset = 0;
 
@@ -145,13 +239,13 @@ std::array<int, NUM> findChasOfArray(T *arr)
 int shared_mem_fd;
 
 void initialize_shared_memory() {
-	shared_mem_fd = shm_open(NAME/*"/dev/shm/shared_mem"*/, O_RDONLY, 0666);
+	shared_mem_fd = shm_open(NAME/*"/dev/shm/shared_mem"*/, O_RDWR, 0666);
 	if (shared_mem_fd < 0) {
 		perror("shm_open()");
 		return;
 	}
 
-	data = static_cast<char *const>(mmap(nullptr, SIZE, PROT_READ, MAP_SHARED, shared_mem_fd, 0));
+	data = static_cast<char *const>(mmap(nullptr, SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shared_mem_fd, 0));
     	if (data == MAP_FAILED) {
         	perror("mmap failed");
         	std::exit(EXIT_FAILURE);
@@ -177,6 +271,15 @@ int main() {
 
     int destroy = 0;
     initialize_shared_memory();
+    //Global = (struct GlobalMemory *) (cha_aware_malloc(sizeof(struct GlobalMemory)));
+    //dummy = (struct dummy_struct *) (cha_aware_malloc(sizeof(struct dummy_struct)));
+    dummy_arr = (int *) cha_aware_malloc(10*sizeof(int));
+    std::cerr << "before 1\n";
+    //Global->n2bcalc = 100;
+    dummy_arr[0] = 100;
+    //dummy->a = 100;
+    //Global->rmin[100] = 100;
+    std::cerr << "before 2\n";
     //printf("argv[1]: %s\n", argv[1]);
     //if(argc == 2 && strcmp("1", argv[1]) == 0) {
         //destroy = 1;

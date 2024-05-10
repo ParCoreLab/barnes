@@ -173,7 +173,21 @@ void * cha_aware_malloc(size_t size) {
         assert(allocation_offset + size < NUM);
         void * allocated_address = reinterpret_cast<void*>(&data[allocation_offset]);
         allocation_offset += size;
+	std::cerr << "allocation_offset is " << allocation_offset << "\n";
         return allocated_address;
+}
+
+void * cha_aware_memalign(size_t alignment, size_t size) {
+        uint64_t allocated_address = (uint64_t) (&data[allocation_offset]);
+        while((allocated_address % alignment) != 0) {
+                allocation_offset++;
+                allocated_address = (uint64_t) (&data[allocation_offset]);
+        }
+        assert(allocation_offset + size < NUM);
+        void * returned_address = reinterpret_cast<void*>(&data[allocation_offset]);
+        allocation_offset += size;
+	//std::cerr << "allocation_offset is " << allocation_offset << "\n";
+        return returned_address;
 }
 
 uint8_t cha_of_element(void* offset) {
@@ -183,13 +197,13 @@ uint8_t cha_of_element(void* offset) {
 }
 
 void initialize_shared_memory() {
-        shared_mem_fd = shm_open(NAME/*"/dev/shm/shared_mem"*/, O_RDONLY, 0666);
+        shared_mem_fd = shm_open(NAME/*"/dev/shm/shared_mem"*/, O_RDWR, 0666);
         if (shared_mem_fd < 0) {
                 perror("shm_open()");
                 return;
         }
 
-        data = static_cast<char *const>(mmap(nullptr, SIZE, PROT_READ, MAP_SHARED, shared_mem_fd, 0));
+        data = static_cast<char *const>(mmap(nullptr, SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shared_mem_fd, 0));
         if (data == MAP_FAILED) {
                 perror("mmap failed");
                 std::exit(EXIT_FAILURE);
@@ -602,19 +616,22 @@ int main (int argc, string argv[])
    }
 
    Global = NULL;
-
+   initialize_shared_memory();
    pthread_spin_init(&map_spinlock, PTHREAD_PROCESS_SHARED);
    initparam(defv); // modify initparam to read input from stdin only once
    startrun(); // create another version of this function that reuses loaded data
    initoutput(); // no need for modification, can be repeated
    tab_init(); // no need to be recalled in the next iteration of barnes computation
-   initialize_shared_memory();
 
    int *array1 = reinterpret_cast<int*>(cha_aware_malloc(8 * sizeof(int)));
     for(int i = 0; i < 8; i++)
         assert(cha_of_element((void *) &array1[i]) == findCHAByHashing(uintptr_t(&array1[i]), base_sequence_28_skx));
     std::cout << "cha assert for cha_aware_malloc success 1." << std::endl;
 
+   int *array2 = reinterpret_cast<int*>(cha_aware_memalign(64, 8 * sizeof(int)));
+    for(int i = 0; i < 8; i++)
+        assert(cha_of_element((void *) &array2[i]) == findCHAByHashing(uintptr_t(&array2[i]), base_sequence_28_skx));
+    std::cout << "cha assert for cha_aware_memalign success 2." << std::endl;
    // the following 5 initializations need to be repeated before each iteration of barnes computation
    Global->tracktime = 0;
    Global->partitiontime = 0;
@@ -950,7 +967,8 @@ void ANLinit()
    MAIN_INITENV(,70000000,);
    /* Allocate global, shared memory */
 
-   Global = (struct GlobalMemory *) G_MALLOC(sizeof(struct GlobalMemory));
+   Global = (struct GlobalMemory *) (cha_aware_malloc(sizeof(struct GlobalMemory)));
+   //Global = (struct GlobalMemory *) G_MALLOC(sizeof(struct GlobalMemory));
    if (Global==NULL) error("No initialization for Global\n");
 
 #if 0
@@ -961,13 +979,15 @@ void ANLinit()
 #endif
 
    // create a variant of barinit that only zeroes out counter and cycle
+   std::cerr << "here 1\n";
    BARINIT(Global->Barrier, NPROC); 
-
+   std::cerr << "here 2\n";
    // no need to be added in the variant of ANLinit
    LOCKINIT(Global->CountLock); 
-
+   std::cerr << "here 3\n";
    // no need to be added in the variant of ANLinit
    LOCKINIT(Global->io_lock);
+   std::cerr << "here 4\n";
 }
 
 /*
@@ -1047,8 +1067,9 @@ void tab_init()
    for (i = 0; i < NPROC; ++i) {
       //Local[i].ctab = (cellptr) G_MALLOC((maxcell / NPROC) * sizeof(cell));
 
-      const int ret = posix_memalign((void **)(&(Local[i].ctab)), CACHELINE_SIZE, (maxcell / NPROC) * sizeof(cell));
-      assert(ret == 0);
+      //const int ret = posix_memalign((void **)(&(Local[i].ctab)), CACHELINE_SIZE, (maxcell / NPROC) * sizeof(cell));
+      Local[i].ctab = (cellptr) cha_aware_memalign(CACHELINE_SIZE, (maxcell / NPROC) * sizeof(cell));
+      //assert(ret == 0);
 
       if (Local[i].ctab==NULL) error("No initialization for ctab\n");
 
@@ -1065,13 +1086,16 @@ void tab_init()
    /* file is read */
    maxmycell = maxcell / NPROC;
    maxmyleaf = maxleaf / NPROC;
-   Local[0].mycelltab = (cellptr*) G_MALLOC(NPROC*maxmycell*sizeof(cellptr));
+   //Local[0].mycelltab = (cellptr*) G_MALLOC(NPROC*maxmycell*sizeof(cellptr));
+   Local[0].mycelltab = (cellptr*) cha_aware_malloc(NPROC*maxmycell*sizeof(cellptr));
    Local[0].myleaftab = (leafptr*) G_MALLOC(NPROC*maxmyleaf*sizeof(leafptr));
 
    //CellLock = (struct CellLockType *) G_MALLOC(sizeof(struct CellLockType));
 
-   const int ret = posix_memalign((void **)(&CellLock), CACHELINE_SIZE, sizeof(struct CellLockType));
-   assert(ret == 0);
+   //const int ret = posix_memalign((void **)(&CellLock), CACHELINE_SIZE, sizeof(struct CellLockType));
+   //assert(ret == 0);
+   
+   CellLock = reinterpret_cast<struct CellLockType*> (cha_aware_memalign(CACHELINE_SIZE, sizeof(struct CellLockType)));
 
    if (CellLock==NULL) error("No initialization for CellLock\n");
 
@@ -1217,6 +1241,7 @@ void startrun()
    ANLinit(); // create another variant of ANLinit that only calls the variant of barinit
    setbound(); // no need for modification, can be repeated
    Local[0].tout = Local[0].tnow + dtout;
+   std::cerr << "inside startrun\n";
 }
 
 void startrun_repeated()
