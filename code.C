@@ -87,9 +87,13 @@ MAIN_ENV
 #include "grav.h"
 #include "constants.h"
 #include "protocol.h"
+#include "hash.h"
 
 std::map<long, std::multiset<double *>> threadid_addresses_map;
 pthread_spinlock_t map_spinlock;
+
+thread_local uint64_t sampling_counter = 0;
+thread_local uint64_t next_sampling_iteration = 0;
 
 string defv[] = {                 /* DEFAULT PARAMETER VALUES              */
     /* file names for input/output                                         */
@@ -114,6 +118,7 @@ string defv[] = {                 /* DEFAULT PARAMETER VALUES              */
 };
 
 /* The more complicated 3D case */
+#define NCORES 28
 #define NUM_SOCKETS 2
 #define NUM_CHA_BOXES 28
 #define NUM_DIRECTIONS 32
@@ -153,7 +158,14 @@ string defv[] = {                 /* DEFAULT PARAMETER VALUES              */
 
 #define CACHELINE_SIZE 64
 
+#define ALIGN_TO_CACHE_LINE(addr) ((uint64_t)(addr) & (~(CACHE_LINE_SZ-1)))
+#define OFFSET_OF_CACHE_LINE(addr) ((uint64_t)(addr) >> 6)
+#define HASHTABLE_SIZE (100000)
+#define SAMPLING_PERIOD (1000)
 //static const long CHA_MSR_PMON_CTRL_BASE = 0x0E01L;
+
+HashTable comm_map(HASHTABLE_SIZE);
+std::vector<std::vector<std::pair<int, std::unordered_map<int, int>>>> comm_matrix(NCORES, std::vector<std::pair<int, std::unordered_map<int, int>>> (NCORES, std::pair<int, std::unordered_map<int, int>> {}));
 
 enum class TrafficType
 {
@@ -166,6 +178,12 @@ enum class TrafficType
 char *data;
 uintptr_t allocation_offset = 0;
 int shared_mem_fd;
+
+unsigned short rdtsc() {
+	unsigned short c;
+	__asm__("rdtsc\n" : "=a" (c));
+	return c;
+}
 
 int getCoreCount() { return static_cast<int>(sysconf(_SC_NPROCESSORS_ONLN)); }
 
@@ -213,6 +231,91 @@ void initialize_shared_memory() {
                 holder += (char) data[i];
         }
         std::cerr << holder << "\n";
+}
+
+void inc_comm(int tid,
+		const int& cha,
+		const long unsigned int& addr)
+{
+//#if 0
+	if(sampling_counter++ < next_sampling_iteration) {
+		//cerr << "inc_comm discarded\n";
+		return;
+	}
+//#endif
+	next_sampling_iteration = SAMPLING_PERIOD - 256 + rdtsc() % 256 + next_sampling_iteration;
+	uint64_t line = OFFSET_OF_CACHE_LINE(addr);
+	uint64_t hash_idx = comm_map.hashFunction(line);
+	int sh = 1;
+	int a;
+	int b;
+
+	comm_map.wait(hash_idx);
+	if(!comm_map.findItem(hash_idx, line))	{
+		comm_map.insertItem(hash_idx, line);
+	} 
+	std::pair<long unsigned int, std::pair<int, int>>& comm_map_element = comm_map.getItem(hash_idx, line);
+
+	a = comm_map_element.second.first;
+	b = comm_map_element.second.second;
+
+	if (a == 0 && b == 0)
+		sh = 0;
+	if (a != 0 && b != 0)
+		sh = 2;
+	switch (sh) {
+		case 0: 
+			comm_map_element.second.first = tid+1;
+			//mutex_map[hash_idx].unlock();
+			comm_map.signal(hash_idx);
+			//mtx->unlock();
+			//global_mtx.unlock();
+			//comm_map[line].first = tid+1;
+			break;
+
+		case 1: 
+			comm_map_element.second.first = tid+1;
+			//comm_map[line].second = a;
+			comm_map_element.second.second = a;
+			//mutex_map[hash_idx].unlock();
+			comm_map.signal(hash_idx);
+			//mtx->unlock();
+			//global_mtx.unlock();
+			comm_matrix[tid][a-1].first++;
+			comm_matrix[tid][a-1].second[cha]++;
+			break;
+
+		case 2: // two previous accesses
+			// if (a != tid+1 && b != tid+1) {
+			//comm_map[line].first = tid+1;
+			comm_map_element.second.first = tid+1;
+			//comm_map[line].second = a;
+			comm_map_element.second.second = a;
+			//mutex_map[hash_idx].unlock();
+			comm_map.signal(hash_idx);
+			//mtx->unlock();
+			//global_mtx.unlock();
+			if (tid!=a-1) {
+				//if(tid < a-1) {
+				comm_matrix[tid][a-1].first++;
+				comm_matrix[tid][a-1].second[cha]++;
+				//} else {
+				//	comm_matrix[a-1][tid].first++;
+				//	comm_matrix[a-1][tid].second[cha]++; 
+				//}
+			}
+			if (tid!=b-1) {
+				//if(tid < b-1) {
+				comm_matrix[tid][b-1].first++;
+				comm_matrix[tid][b-1].second[cha]++;
+				//} else {
+				//	comm_matrix[b-1][tid].first++;
+				//	comm_matrix[b-1][tid].second[cha]++;
+				//}
+			}
+
+			break;
+	}
 }
 
 std::string enumToStr(TrafficType traffic_type)
@@ -618,6 +721,10 @@ int main (int argc, string argv[])
    Global = NULL;
    initialize_shared_memory();
    pthread_spin_init(&map_spinlock, PTHREAD_PROCESS_SHARED);
+
+   //HashTable comm_map_new(HASHTABLE_SIZE);
+   //std::vector<std::vector<std::pair<int, std::unordered_map<int, int>>>> comm_matrix(NCORES, std::vector<std::pair<int, std::unordered_map<int, int>>> (NCORES, std::pair<int, std::unordered_map<int, int>> {}));
+
    initparam(defv); // modify initparam to read input from stdin only once
    startrun(); // create another version of this function that reuses loaded data
    initoutput(); // no need for modification, can be repeated
