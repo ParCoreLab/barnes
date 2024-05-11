@@ -161,7 +161,7 @@ string defv[] = {                 /* DEFAULT PARAMETER VALUES              */
 #define ALIGN_TO_CACHE_LINE(addr) ((uint64_t)(addr) & (~(CACHE_LINE_SZ-1)))
 #define OFFSET_OF_CACHE_LINE(addr) ((uint64_t)(addr) >> 6)
 #define HASHTABLE_SIZE (100000)
-#define SAMPLING_PERIOD (1000)
+#define SAMPLING_PERIOD (100000)
 //static const long CHA_MSR_PMON_CTRL_BASE = 0x0E01L;
 
 HashTable *comm_map;//(HASHTABLE_SIZE);
@@ -239,14 +239,14 @@ void inc_comm(int tid,
 		const long unsigned int& addr)
 {
 	//std::cerr << "here 0 2\n";
-//#if 0
+#if 0
 	if(sampling_counter++ < next_sampling_iteration) {
 		//cerr << "inc_comm discarded\n";
 		return;
 	}
-//#endif
+#endif
         //std::cerr << "inc_comm begins\n";
-	next_sampling_iteration = SAMPLING_PERIOD + next_sampling_iteration;
+	//next_sampling_iteration = SAMPLING_PERIOD + next_sampling_iteration;
 	//std::cerr << "inc_comm begins 2 " << addr << "\n";
 	uint64_t line = OFFSET_OF_CACHE_LINE(addr);
 	//std::cerr << "inc_comm begins 3\n";
@@ -2443,7 +2443,7 @@ bool subdivp(register nodeptr p, real dsq, long ProcessId)
                 )
         );
 #endif
-	//inc_comm(ProcessId, (const int) (cha_of_element(reinterpret_cast<void*> (&(Pos(p))))), (const long unsigned int)(&(Pos(p))));
+	inc_comm(ProcessId, (const int) (cha_of_element(reinterpret_cast<void*> (&(Pos(p))))), (const long unsigned int)(&(Pos(p))));
 	pthread_spin_unlock(&map_spinlock);
    }
    DOTVP(Local[ProcessId].drsq, Local[ProcessId].dr, Local[ProcessId].dr);
