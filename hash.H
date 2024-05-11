@@ -8,6 +8,7 @@ class HashTable
 	std::pair<std::atomic<uint32_t>,std::list<std::pair<long unsigned int, std::pair<int, int>>>> *table;
 	public:
 	HashTable(int index_num);  // Constructor
+	HashTable();
 	~HashTable();  // Destructor
 
 	// inserts a key into hash table
@@ -27,14 +28,33 @@ class HashTable
 	}
 
 	void displayHash();
+
+	void print();
+	void print_long(long unsigned int index);
+
+	HashTable& operator=(HashTable other)
+    	{
+        	std::swap(INDEX_NUM, other.INDEX_NUM);
+        	std::swap(table, other.table);
+        	return *this;
+    	}
 };
+
+HashTable::HashTable()
+{
+        INDEX_NUM = 0;
+}
 
 HashTable::HashTable(int index_num)
 {
-	this->INDEX_NUM = index_num;
+	std::cerr << "in constructor begins\n";
+	INDEX_NUM = index_num;
 	table = new std::pair<std::atomic<uint32_t>,std::list<std::pair<long unsigned int, std::pair<int, int>>>>[INDEX_NUM];
 	for(int i = 0; i < INDEX_NUM; i++)
 		table[i].first = 1;
+	//for(int i = 0; i < INDEX_NUM; i++)
+          //      std::cerr << table[i].first << "\n";
+	std::cerr << "in constructor ends\n";
 }
 
 HashTable::~HashTable()
@@ -81,8 +101,21 @@ void HashTable::wait(long unsigned int index)
 
 void HashTable::signal(long unsigned int index)
 {
+	//std::cerr << "in signal\n";
         auto val = table[index].first.fetch_add(1, std::memory_order_seq_cst);
 	//std::cerr << "in signal, val: " << val << "\n";
+}
+
+void HashTable::print_long(long unsigned int index)
+{
+	std::cerr << "hello world long\n";
+}
+
+void HashTable::print()
+{
+        std::cerr << "hello world\n";
+        //auto val = table[index].first.fetch_add(1, std::memory_order_seq_cst);
+        //std::cerr << "in signal, val: " << val << "\n";
 }
 
 std::pair<long unsigned int, std::pair<int, int>>& HashTable::getItem(long unsigned int index, long unsigned int cacheLine)

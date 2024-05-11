@@ -164,7 +164,7 @@ string defv[] = {                 /* DEFAULT PARAMETER VALUES              */
 #define SAMPLING_PERIOD (1000)
 //static const long CHA_MSR_PMON_CTRL_BASE = 0x0E01L;
 
-HashTable comm_map(HASHTABLE_SIZE);
+HashTable *comm_map;//(HASHTABLE_SIZE);
 std::vector<std::vector<std::pair<int, std::unordered_map<int, int>>>> comm_matrix(NCORES, std::vector<std::pair<int, std::unordered_map<int, int>>> (NCORES, std::pair<int, std::unordered_map<int, int>> {}));
 
 enum class TrafficType
@@ -191,7 +191,7 @@ void * cha_aware_malloc(size_t size) {
         assert(allocation_offset + size < NUM);
         void * allocated_address = reinterpret_cast<void*>(&data[allocation_offset]);
         allocation_offset += size;
-	std::cerr << "allocation_offset is " << allocation_offset << "\n";
+	//std::cerr << "allocation_offset is " << allocation_offset << "\n";
         return allocated_address;
 }
 
@@ -209,6 +209,7 @@ void * cha_aware_memalign(size_t alignment, size_t size) {
 }
 
 uint8_t cha_of_element(void* offset) {
+	//std::cerr << (uint64_t) offset - (uint64_t) data << "\n";
         assert((uint64_t) offset - (uint64_t) data < NUM);
         uint8_t * located_address = reinterpret_cast<uint8_t*>((uint64_t) offset+NUM);
         return *located_address;
@@ -237,37 +238,60 @@ void inc_comm(int tid,
 		const int& cha,
 		const long unsigned int& addr)
 {
+	//std::cerr << "here 0 2\n";
 //#if 0
 	if(sampling_counter++ < next_sampling_iteration) {
 		//cerr << "inc_comm discarded\n";
 		return;
 	}
 //#endif
-	next_sampling_iteration = SAMPLING_PERIOD - 256 + rdtsc() % 256 + next_sampling_iteration;
+        //std::cerr << "inc_comm begins\n";
+	next_sampling_iteration = SAMPLING_PERIOD + next_sampling_iteration;
+	//std::cerr << "inc_comm begins 2 " << addr << "\n";
 	uint64_t line = OFFSET_OF_CACHE_LINE(addr);
-	uint64_t hash_idx = comm_map.hashFunction(line);
+	//std::cerr << "inc_comm begins 3\n";
+	//std::cerr << "here 0\n";
+	//std::cerr << line << "\n";
+	//std::cerr << "before hashFunction\n";
+	uint64_t hash_idx = comm_map->hashFunction(line);
+	//std::cerr << "after hashFunction\n";
+//#if 0
+	//std::cerr << "here 0 1\n";
 	int sh = 1;
 	int a;
 	int b;
-
-	comm_map.wait(hash_idx);
-	if(!comm_map.findItem(hash_idx, line))	{
-		comm_map.insertItem(hash_idx, line);
+//#if 0
+	comm_map->wait(hash_idx);
+	//std::cerr << "here 1\n";
+//#if 0
+	if(!comm_map->findItem(hash_idx, line))	{
+		//std::cerr << "here 2\n";
+		comm_map->insertItem(hash_idx, line);
+		//std::cerr << "here 3\n";
 	} 
-	std::pair<long unsigned int, std::pair<int, int>>& comm_map_element = comm_map.getItem(hash_idx, line);
+//#endif
+	//std::cerr << "here 4\n";
+	std::pair<long unsigned int, std::pair<int, int>>& comm_map_element = comm_map->getItem(hash_idx, line);
+	
 
 	a = comm_map_element.second.first;
 	b = comm_map_element.second.second;
-
+//#endif
 	if (a == 0 && b == 0)
 		sh = 0;
 	if (a != 0 && b != 0)
 		sh = 2;
+//#endif
+	//comm_map->print();
+	//comm_map->signal(hash_idx);
+	//comm_map->print_long(hash_idx);
+	//comm_map->print();
+//#if 0
 	switch (sh) {
 		case 0: 
 			comm_map_element.second.first = tid+1;
 			//mutex_map[hash_idx].unlock();
-			comm_map.signal(hash_idx);
+			comm_map->signal(hash_idx);
 			//mtx->unlock();
 			//global_mtx.unlock();
 			//comm_map[line].first = tid+1;
@@ -278,7 +302,7 @@ void inc_comm(int tid,
 			//comm_map[line].second = a;
 			comm_map_element.second.second = a;
 			//mutex_map[hash_idx].unlock();
-			comm_map.signal(hash_idx);
+			comm_map->signal(hash_idx);
 			//mtx->unlock();
 			//global_mtx.unlock();
 			comm_matrix[tid][a-1].first++;
@@ -292,13 +316,14 @@ void inc_comm(int tid,
 			//comm_map[line].second = a;
 			comm_map_element.second.second = a;
 			//mutex_map[hash_idx].unlock();
-			comm_map.signal(hash_idx);
+			comm_map->signal(hash_idx);
 			//mtx->unlock();
 			//global_mtx.unlock();
 			if (tid!=a-1) {
 				//if(tid < a-1) {
 				comm_matrix[tid][a-1].first++;
 				comm_matrix[tid][a-1].second[cha]++;
+				//std::cerr << "comm is detected\n";				
 				//} else {
 				//	comm_matrix[a-1][tid].first++;
 				//	comm_matrix[a-1][tid].second[cha]++; 
@@ -316,6 +341,7 @@ void inc_comm(int tid,
 
 			break;
 	}
+//#endif
 }
 
 std::string enumToStr(TrafficType traffic_type)
@@ -640,6 +666,72 @@ int findCha(const double* val)
 #endif
 
 int getMostAccessedCHA(int tid1,
+		int tid2,
+		std::multiset<std::tuple<int, int, int, int>, std::greater<std::tuple<int, int, int, int>>> ranked_cha_access_count_per_pair,
+		Topology topo)
+{
+	int max = 0;
+	std::vector<int> considered_chas;
+	std::map<int, bool> considered_chas_flag;
+
+	auto it = ranked_cha_access_count_per_pair.begin();
+	while (it != ranked_cha_access_count_per_pair.end())
+	{
+		// std::pair<int, int> tid_pair(std::get<2>(*it), std::get<3>(*it));
+		if ((std::get<2>(*it) == tid1 && std::get<3>(*it) == tid2) || (std::get<3>(*it) == tid1 && std::get<2>(*it) == tid2))
+		{
+			// SPDLOG_INFO("returning {}", std::get<1>(*it));
+			max = std::get<0>(*it);
+			considered_chas_flag[std::get<1>(*it)] = true;
+			considered_chas.push_back(std::get<1>(*it));
+			break;
+		}
+		it++;
+	}
+
+	//if(max == 0)
+	//	return -1;
+
+	//SPDLOG_INFO("max: {}, communication between threads {} and {} uses the following chas the most", max, tid1, tid2);
+	while (it != ranked_cha_access_count_per_pair.end())
+	{
+		// std::pair<int, int> tid_pair(std::get<2>(*it), std::get<3>(*it));
+		if ((std::get<2>(*it) == tid1 && std::get<3>(*it) == tid2) || (std::get<3>(*it) == tid1 && std::get<2>(*it) == tid2))
+		{
+			// SPDLOG_INFO("returning {}", std::get<1>(*it));
+			if (considered_chas_flag[std::get<1>(*it)] == false && std::get<0>(*it) > (0.9 * max))
+			{
+				//SPDLOG_INFO("cha {}, access count: {}, max: {}", std::get<1>(*it), std::get<0>(*it), max);
+				considered_chas_flag[std::get<1>(*it)] = true;
+				considered_chas.push_back(std::get<1>(*it));
+			}
+		}
+		it++;
+	}
+
+	int x_total = 0;
+	int y_total = 0;
+	int cha_count = 0;
+	//SPDLOG_INFO("communication between threads {} and {} involves the following CHAs:", tid1, tid2);
+	for (auto it1 : considered_chas)
+	{
+		auto tile = topo.getTile(it1);
+		x_total += tile.x;
+		y_total += tile.y;
+		cha_count++;
+		//SPDLOG_INFO("cha {}, x: {}, y: {}", tile.cha, tile.x, tile.y);
+	}
+
+	int x_coord = x_total / cha_count;
+	int y_coord = y_total / cha_count;
+	auto tile = topo.getTile(x_coord, y_coord);
+	//SPDLOG_INFO("the center of gravity is cha {}, x: {}, y: {}", tile.cha, tile.x, tile.y);
+	// approximate the algorithm now
+	return tile.cha;
+}
+
+#if 0
+int getMostAccessedCHA(int tid1,
                        int tid2,
                        std::multiset<std::tuple<int, int, int, int>, std::greater<>> ranked_cha_access_count_per_pair,
                        Topology topo)
@@ -700,6 +792,7 @@ int getMostAccessedCHA(int tid1,
     // approximate the algorithm now
     return tile.cha;
 }
+#endif
 
 int main (int argc, string argv[])
 {
@@ -719,9 +812,13 @@ int main (int argc, string argv[])
    }
 
    Global = NULL;
+   //HashTable *comm_map;//(HASHTABLE_SIZE);
+   //HashTable comm_map(HASHTABLE_SIZE);
+   //std::vector<std::vector<std::pair<int, std::unordered_map<int, int>>>> comm_matrix(NCORES, std::vector<std::pair<int, std::unordered_map<int, int>>> (NCORES, std::pair<int, std::unordered_map<int, int>> {}));
    initialize_shared_memory();
    pthread_spin_init(&map_spinlock, PTHREAD_PROCESS_SHARED);
-
+   comm_map = new HashTable (HASHTABLE_SIZE);
+   //comm_map->print();
    //HashTable comm_map_new(HASHTABLE_SIZE);
    //std::vector<std::vector<std::pair<int, std::unordered_map<int, int>>>> comm_matrix(NCORES, std::vector<std::pair<int, std::unordered_map<int, int>>> (NCORES, std::pair<int, std::unordered_map<int, int>> {}));
 
@@ -730,6 +827,7 @@ int main (int argc, string argv[])
    initoutput(); // no need for modification, can be repeated
    tab_init(); // no need to be recalled in the next iteration of barnes computation
 
+#if 0
    int *array1 = reinterpret_cast<int*>(cha_aware_malloc(8 * sizeof(int)));
     for(int i = 0; i < 8; i++)
         assert(cha_of_element((void *) &array1[i]) == findCHAByHashing(uintptr_t(&array1[i]), base_sequence_28_skx));
@@ -739,6 +837,7 @@ int main (int argc, string argv[])
     for(int i = 0; i < 8; i++)
         assert(cha_of_element((void *) &array2[i]) == findCHAByHashing(uintptr_t(&array2[i]), base_sequence_28_skx));
     std::cout << "cha assert for cha_aware_memalign success 2." << std::endl;
+#endif
    // the following 5 initializations need to be repeated before each iteration of barnes computation
    Global->tracktime = 0;
    Global->partitiontime = 0;
@@ -807,138 +906,93 @@ int main (int argc, string argv[])
    const auto algo_start = high_resolution_clock::now();
 
    assert(NPROC > 1);  // below algo depends on this. we will find thread pairs.
-   auto head = threadid_addresses_map.begin();
-   std::cout << "here 1\n";
-   std::map<long, std::multiset<double *>>::iterator tail;
-   if(head != threadid_addresses_map.end())
-   	tail = std::next(threadid_addresses_map.begin());
-   std::cout << "here 2\n";
 
-   std::multiset<tuple<int, int, int>, greater<>> total_comm_count_t1_t2;
-   std::multiset<tuple<int, int, int, int>, greater<>> total_cha_freq_count_t1_t2;
-
-   // map<pair<int, int>, multiset<Cell *>> pairing_addresses;
-   std::cout << "before head != threadid_addresses_map.end()" << std::endl;
-   while (head != threadid_addresses_map.end()) {
-        const auto orig_tail = tail;
-        while (tail != threadid_addresses_map.end()) {
-            const int t1 = head->first;
-            const int t2 = tail->first;   
-	    // cout << "head: " << t1 << ", tail: " << t2 << endl;
-
-            const multiset<double *> t1_addresses = head->second;
-            const multiset<double *> t2_addresses = tail->second;
-
-	    std::multiset<double *> common_addresses;
-            std::set_intersection(t1_addresses.begin(), t1_addresses.end(), t2_addresses.begin(), t2_addresses.end(),
-                                  std::inserter(common_addresses, common_addresses.begin()));
-
-	    std::unordered_map<int, int> cha_freq_map;
-	    
-	    // this part is changed wrt fluidanimate.
-#if 0
-            for(const double* common_addr : common_addresses) {
-              ++cha_freq_map[findCha(common_addr)];
-            }
-            // this part is changed wrt fluidanimate.
-
-	    for(const auto& [cha, freq] : cha_freq_map) {
-                total_cha_freq_count_t1_t2.insert({freq, cha, t1, t2});
-            }
-
-	    total_comm_count_t1_t2.insert({common_addresses.size(), t1, t2});
-#endif
-	    // pairing_addresses[{t1, t2}] = common_addresses; // pairing is not used at the moment. here just for clarity.
-	    
-	    ++tail;
-	}
-	tail = std::next(orig_tail);
-	++head;
-   }    
-
-   int mapped_thread_count = 0;
-   auto it = total_cha_freq_count_t1_t2.begin();
-   auto it1 = total_comm_count_t1_t2.begin();
-   std::vector<int> thread_to_core(NPROC, -1);
-
-   auto topo = Topology(cha_core_map, CAPID6);
-   std::vector<Tile> mapped_tiles;
-
-   // SPDLOG_TRACE("~~~~~~~~~~~~~~~~");
-    //  fprintf(stderr, "before thread mapping creation\n");
     
-    // start
-    // it = ranked_cha_access_count_per_pair.begin();
-    while (mapped_tiles.size() < NPROC &&
-           /*it != ranked_cha_access_count_per_pair.end()*/ it1 != total_comm_count_t1_t2.end()) {
-        // std::pair<int, int> tid_pair(std::get<2>(*it), std::get<3>(*it));
-        std::pair<int, int> tid_pair(std::get<1>(*it1), std::get<2>(*it1));
-        if (thread_to_core[tid_pair.first] == -1 && thread_to_core[tid_pair.second] == -1) {
-            // SPDLOG_TRACE("cha with max access: {}", std::get<1>(*it));
-            int cha_id = getMostAccessedCHA(tid_pair.first, tid_pair.second, total_cha_freq_count_t1_t2, topo);
-            if (cha_id == -1) {
-                // SPDLOG_INFO("error: cha is -1");
-                it1++;
-                continue;
-            }
-            // auto tile = topo.getTile(std::get<1>(*it));
-            auto tile = topo.getTile(cha_id);
-            // SPDLOG_TRACE("cha {}, is colocated with core {}", cha_id, tile.core);
-            //if (thread_to_core[tid_pair.first] == -1)
-            {
-                // SPDLOG_INFO("fetching a tile closest to tile with cha {} and core {}, cha supposed to be {}",
-                // tile.cha, tile.core, std::get<1>(*it));
-                auto closest_tile = topo.getClosestTile(tile, mapped_tiles);
-                // auto closest_tile = topo.getClosestTilewithThreshold(tile, mapped_tiles);
-                // SPDLOG_TRACE("* closest _available_ core to cha {} is: {}", tile.cha, closest_tile.core);
-                mapped_tiles.push_back(closest_tile);
-                thread_to_core[tid_pair.first] = closest_tile.core;
-                // SPDLOG_TRACE("assigned thread with id {} to core {}", tid_pair.first, closest_tile.core);
-            }
-#if 0
-            else
-            {
-                SPDLOG_TRACE("--> Already assigned thread with id {} to core {}, skipping it.", tid_pair.first, thread_to_core[tid_pair.first]);
-            }
-#endif
-
-            //if (thread_to_core[tid_pair.second] == -1)
-            {
-                // SPDLOG_INFO("fetching a tile closest to tile with cha {} and core {}, cha supposed to be {}",
-                // tile.cha, tile.core, std::get<1>(*it));
-                auto closest_tile = topo.getClosestTile(tile, mapped_tiles);
-                // auto closest_tile = topo.getClosestTilewithThreshold(tile, mapped_tiles);
-                // SPDLOG_TRACE("# closest _available_ core to cha {} is: {}", tile.cha, closest_tile.core);
-                mapped_tiles.push_back(closest_tile);
-                thread_to_core[tid_pair.second] = closest_tile.core;
-                // SPDLOG_TRACE("assigned thread with id {} to core {}", tid_pair.second, closest_tile.core);
-            }
-
-#if 0
-            else
-            {
-                SPDLOG_TRACE("--> Already assigned thread with id {} to core {}, skipping it.", tid_pair.second, thread_to_core[tid_pair.second]);
-            }
-#endif
-        }
-        //#if 0
-        else if (thread_to_core[tid_pair.first] == -1) {
-            auto tile = topo.getTileByCore(thread_to_core[tid_pair.second]);
-            auto closest_tile = topo.getClosestTile(tile, mapped_tiles);
-            mapped_tiles.push_back(closest_tile);
-            thread_to_core[tid_pair.first] = closest_tile.core;
-        } else if (thread_to_core[tid_pair.second] == -1) {
-            auto tile = topo.getTileByCore(thread_to_core[tid_pair.first]);
-            auto closest_tile = topo.getClosestTile(tile, mapped_tiles);
-            mapped_tiles.push_back(closest_tile);
-            thread_to_core[tid_pair.second] = closest_tile.core;
-        }
-        //#endif
-
-        it1++;
-    }
     // end
+    std::multiset<std::tuple<int, int, int, int>, greater<std::tuple<int, int, int, int>>> ranked_cha_access_count_per_pair;
+    std::multiset<std::tuple<int, int, int>, greater<std::tuple<int, int, int>>> ranked_communication_count_per_pair;
 
+	for (int i = 0; i < comm_matrix.size(); ++i)
+	{
+		for (int j = i + 1; j < comm_matrix[i].size(); ++j)
+		{
+			for (int k = 0; k < base_assigned_cores.size(); k++)
+                        {
+                                // ranked_communication_count_per_pair.insert({it.second, it.first, i, j})
+                                if(comm_matrix[i][j].second[k] > 0 || comm_matrix[j][i].second[k] > 0)
+                                	ranked_cha_access_count_per_pair.insert({comm_matrix[i][j].second[k] + comm_matrix[j][i].second[k], k, i, j});
+                        }
+			if(comm_matrix[i][j].first > 0 || comm_matrix[j][i].first > 0)	
+				ranked_communication_count_per_pair.insert({comm_matrix[i][j].first + comm_matrix[j][i].first, i, j});
+		}
+	}
+
+	int mapped_thread_count = 0;
+	auto it = ranked_cha_access_count_per_pair.begin();
+	auto it1 = ranked_communication_count_per_pair.begin();
+	//#endif
+	std::vector<int> thread_to_core(NPROC, -1);
+	//#if 0
+	// fprintf(stderr, "before topology creation\n");
+	auto topo = Topology(cha_core_map, CAPID6);
+	std::vector<Tile> mapped_tiles;
+
+	while (mapped_tiles.size() < NPROC && /*it != ranked_cha_access_count_per_pair.end()*/ it1 != ranked_communication_count_per_pair.end())
+	{
+		// std::pair<int, int> tid_pair(std::get<2>(*it), std::get<3>(*it));
+		std::pair<int, int> tid_pair(std::get<1>(*it1), std::get<2>(*it1));
+		if (thread_to_core[tid_pair.first] == -1 || thread_to_core[tid_pair.second] == -1)
+		{
+			//SPDLOG_INFO("thread {} and thread {} has {} communication count", tid_pair.first, tid_pair.second, std::get<0>(*it1));
+			int cha_id = getMostAccessedCHA(tid_pair.first, tid_pair.second, ranked_cha_access_count_per_pair, topo);
+			if (cha_id == -1)
+			{
+				//SPDLOG_INFO("error: cha is -1");
+				it1++;
+				continue;
+			}
+			// auto tile = topo.getTile(std::get<1>(*it));
+			auto tile = topo.getTile(cha_id);
+			//SPDLOG_TRACE("cha {}, is colocated with core {}", cha_id, tile.core);
+			if (thread_to_core[tid_pair.first] == -1)
+			{
+				// SPDLOG_INFO("fetching a tile closest to tile with cha {} and core {}, cha supposed to be {}", tile.cha, tile.core, std::get<1>(*it));
+				auto closest_tile = topo.getClosestTile(tile, mapped_tiles);
+				// auto closest_tile = topo.getClosestTilewithThreshold(tile, mapped_tiles);
+				//SPDLOG_TRACE("* closest _available_ core to cha {} is: {}", tile.cha, closest_tile.core);
+				mapped_tiles.push_back(closest_tile);
+				thread_to_core[tid_pair.first] = closest_tile.core;
+				//SPDLOG_TRACE("assigned thread with id {} to core {}", tid_pair.first, closest_tile.core);
+			}
+
+			if (thread_to_core[tid_pair.second] == -1)
+			{
+				// SPDLOG_INFO("fetching a tile closest to tile with cha {} and core {}, cha supposed to be {}", tile.cha, tile.core, std::get<1>(*it));
+				auto closest_tile = topo.getClosestTile(tile, mapped_tiles);
+				// auto closest_tile = topo.getClosestTilewithThreshold(tile, mapped_tiles);
+				//SPDLOG_TRACE("# closest _available_ core to cha {} is: {}", tile.cha, closest_tile.core);
+				mapped_tiles.push_back(closest_tile);
+				thread_to_core[tid_pair.second] = closest_tile.core;
+				//SPDLOG_TRACE("assigned thread with id {} to core {}", tid_pair.second, closest_tile.core);
+			}
+		}
+		it1++;
+	}
+	//#endif
+	// end
+	//#endif
+	for (auto ptr : base_assigned_cores)
+        {
+                //thread_to_core[i] = i;
+                std::vector<int>::iterator it = 
+			std::find(thread_to_core.begin(), thread_to_core.end(), ptr);
+		if (it == thread_to_core.end())
+		{
+			std::vector<int>::iterator it1 = 
+				std::find(thread_to_core.begin(), thread_to_core.end(), -1);
+			*it1 = ptr;
+		}
+        }
 
     const auto algo_end = high_resolution_clock::now();
     //std::cout << "Ended preprocesing algo. elapsed time: " << duration_cast<milliseconds>(algo_end - algo_start).count() << "ms" << std::endl;
@@ -998,19 +1052,19 @@ int main (int argc, string argv[])
     Global->forcecalctime = 0;
     Global->current_id = 0;
 
-    uint64_t total_traffic_diff = 0;
-    const int traffic_i = (const int) TrafficType::Invalidate;
-    const auto traffic_type = static_cast<TrafficType>(traffic_i);
+    //uint64_t total_traffic_diff = 0;
+    //const int traffic_i = (const int) TrafficType::Invalidate;
+    //const auto traffic_type = static_cast<TrafficType>(traffic_i);
     // cha aware BM.
     std::cout << "Now running cha aware BM" << std::endl;
     //assert(__threads__<__MAX_THREADS__);
     const auto cha_aware_start = high_resolution_clock::now();
 
-    const auto &before_traffic_vals = storeTraffic(traffic_type);
+    //const auto &before_traffic_vals = storeTraffic(traffic_type);
     CREATE(SlaveStart<false>, static_cast<void*>(thread_to_core.data() /*base_assigned_cores.data()*/), NPROC);
 
     WAIT_FOR_END(NPROC); 
-    const auto &after_traffic_vals = storeTraffic(traffic_type);
+    //const auto &after_traffic_vals = storeTraffic(traffic_type);
     // std::cout << "AFTER JOIN. ended cha aware bm" << std::endl;
 
     const auto cha_aware_end = high_resolution_clock::now();
@@ -1018,7 +1072,7 @@ int main (int argc, string argv[])
     const auto elapsed_cha_aware = duration_cast<nanoseconds>(cha_aware_end - cha_aware_start).count();
     std::cout << "Ended cha aware BM. elapsed time: " << elapsed_cha_aware << "ns" << std::endl;
 //#endif
-
+#if 0
     assert(before_traffic_vals.size() == after_traffic_vals.size());
     for (int i = 0; i < before_traffic_vals.size(); ++i)
     {
@@ -1029,7 +1083,7 @@ int main (int argc, string argv[])
 	}
     } 
     std::cout << "captured traffic: " << total_traffic_diff << std::endl;
-//#endif
+#endif
 #if 0
     // base BM.
 
@@ -1061,6 +1115,7 @@ int main (int argc, string argv[])
   
     //std::cout << "latency improv percentage: " << ((elapsed_base - elapsed_cha_aware) / static_cast<double>(elapsed_base)) * 100 << std::endl;
 #endif
+    delete comm_map;
     pthread_spin_destroy(&map_spinlock);
     //std::cerr << "after pthread_spin_destroy\n";
     MAIN_END;
@@ -1086,15 +1141,15 @@ void ANLinit()
 #endif
 
    // create a variant of barinit that only zeroes out counter and cycle
-   std::cerr << "here 1\n";
+   //std::cerr << "here 1\n";
    BARINIT(Global->Barrier, NPROC); 
-   std::cerr << "here 2\n";
+   //std::cerr << "here 2\n";
    // no need to be added in the variant of ANLinit
    LOCKINIT(Global->CountLock); 
-   std::cerr << "here 3\n";
+   //std::cerr << "here 3\n";
    // no need to be added in the variant of ANLinit
    LOCKINIT(Global->io_lock);
-   std::cerr << "here 4\n";
+   //std::cerr << "here 4\n";
 }
 
 /*
@@ -1180,12 +1235,14 @@ void tab_init()
 
       if (Local[i].ctab==NULL) error("No initialization for ctab\n");
 
-      Local[i].ltab = (leafptr) G_MALLOC((maxleaf / NPROC) * sizeof(leaf));
+      //Local[i].ltab = (leafptr) G_MALLOC((maxleaf / NPROC) * sizeof(leaf));
+      Local[i].ltab = (leafptr) cha_aware_malloc((maxleaf / NPROC) * sizeof(leaf));
    }
 
    /*allocate space for personal lists of body pointers */
    maxmybody = (nbody+maxleaf*MAX_BODIES_PER_LEAF)/NPROC;
-   Local[0].mybodytab = (bodyptr*) G_MALLOC(NPROC*maxmybody*sizeof(bodyptr));
+   //Local[0].mybodytab = (bodyptr*) G_MALLOC(NPROC*maxmybody*sizeof(bodyptr));
+   Local[0].mybodytab = (bodyptr*) cha_aware_malloc(NPROC*maxmybody*sizeof(bodyptr));
    /* space is allocated so that every */
    /* process can have a maximum of maxmybody pointers to bodies */
    /* then there is an array of bodies called bodytab which is  */
@@ -1195,7 +1252,8 @@ void tab_init()
    maxmyleaf = maxleaf / NPROC;
    //Local[0].mycelltab = (cellptr*) G_MALLOC(NPROC*maxmycell*sizeof(cellptr));
    Local[0].mycelltab = (cellptr*) cha_aware_malloc(NPROC*maxmycell*sizeof(cellptr));
-   Local[0].myleaftab = (leafptr*) G_MALLOC(NPROC*maxmyleaf*sizeof(leafptr));
+   Local[0].myleaftab = (leafptr*) cha_aware_malloc(NPROC*maxmyleaf*sizeof(leafptr));
+   //Local[0].myleaftab = (leafptr*) G_MALLOC(NPROC*maxmyleaf*sizeof(leafptr));
 
    //CellLock = (struct CellLockType *) G_MALLOC(sizeof(struct CellLockType));
 
@@ -1302,6 +1360,7 @@ void SlaveStart(void* data)
 
    /* main loop */
    while (Local[ProcessId].tnow < tstop + 0.1 * dtime) {
+      //std::cerr << "before stepsystem\n";
       stepsystem<is_preprocessing>(ProcessId);
 //      printtree(Global->G_root);
       //printf("Going to next step!!!\n");
@@ -1589,6 +1648,7 @@ void maketree(long ProcessId)
         pp < Local[ProcessId].mybodytab+Local[ProcessId].mynbody; pp++) {
       p = *pp;
       if (Mass(p) != 0.0) {
+         //std::cerr << "before loadtree\n";
          Local[ProcessId].Current_Root
             = (nodeptr) loadtree<is_preprocessing>(p, (cellptr) Local[ProcessId].Current_Root,
                                  ProcessId);
@@ -1629,6 +1689,7 @@ void maketree(long ProcessId)
         pthread_mutex_unlock(&(Global->Barrier).mutex);
    }
 
+   //std::cerr << "before hackcofm\n";
    hackcofm<is_preprocessing>(ProcessId );
    {
         unsigned long   Error, Cycle;
@@ -1723,23 +1784,35 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
       if (*qptr == NULL) {
          /* lock the parent cell */
          ALOCK(CellLock->CL, ((cellptr) mynode)->seqnum % MAXLOCK);
+         //std::cerr << "before recording 1\n";
 	 if constexpr (is_preprocessing)
       	 { 
         	pthread_spin_lock(&map_spinlock);
 
+#if 0
         	threadid_addresses_map[ProcessId].insert(
           		reinterpret_cast<double*>(
             			reinterpret_cast<uintptr_t>(&(CellLock->CL)) &
             				~(CACHELINE_SIZE - 1)
           		)
         	);
-
+#endif
+		//inc_comm(int tid, const int& cha, const long unsigned int& addr);
+		int cha = (const int) (cha_of_element(reinterpret_cast<void*> (&(CellLock->CL))));
+		//std::cerr << "before inc_comm 1\n";
+		inc_comm(ProcessId, cha, (const long unsigned int)(&(CellLock->CL)));
+#if 0
                 threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
                                 reinterpret_cast<uintptr_t>(&(((cellptr) mynode)->seqnum)) &
                                         ~(CACHELINE_SIZE - 1)
                         )
                 );
+#endif
+		cha = (const int) (cha_of_element(reinterpret_cast<void*> (&(((cellptr) mynode)->seqnum))));
+		//std::cerr << "before inc_comm 2\n";
+		inc_comm(ProcessId, cha, (const long unsigned int)(&(((cellptr) mynode)->seqnum)));		
+
                 pthread_spin_unlock(&map_spinlock);
       	}
          if (*qptr == NULL) {
@@ -1753,22 +1826,31 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
             flag = FALSE;
          }
          AULOCK(CellLock->CL, ((cellptr) mynode)->seqnum % MAXLOCK);
+	//std::cerr << "before recording 2\n";
 	 if constexpr (is_preprocessing)
          {
                 pthread_spin_lock(&map_spinlock);
 
+#if 0
                 threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
                                 reinterpret_cast<uintptr_t>(&(CellLock->CL)) &
                                         ~(CACHELINE_SIZE - 1)
                         )
                 );
+#endif
+		inc_comm(ProcessId, (const int) (cha_of_element(reinterpret_cast<void*> (&(CellLock->CL)))), (const long unsigned int)(&(CellLock->CL)));
+
+#if 0
 		threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
                                 reinterpret_cast<uintptr_t>(&(((cellptr) mynode)->seqnum)) &
                                         ~(CACHELINE_SIZE - 1)
                         )
                 );
+#endif
+		inc_comm(ProcessId, (const int) (cha_of_element(reinterpret_cast<void*> (&(((cellptr) mynode)->seqnum)))), (const long unsigned int)(&(((cellptr) mynode)->seqnum)));
+
                 pthread_spin_unlock(&map_spinlock);
         }
          /* unlock the parent cell */
@@ -1776,28 +1858,37 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
       if (flag && *qptr && (Type(*qptr) == LEAF)) {
          /*   reached a "leaf"?      */
          ALOCK(CellLock->CL, ((cellptr) mynode)->seqnum % MAXLOCK);
+	 //std::cerr << "before recording 3\n";
 	 if constexpr (is_preprocessing)
          {
                 pthread_spin_lock(&map_spinlock);
 
+#if 0
                 threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
                                 reinterpret_cast<uintptr_t>(&(CellLock->CL)) &
                                         ~(CACHELINE_SIZE - 1)
                         )
                 );
+#endif
+		inc_comm(ProcessId, (const int) (cha_of_element(reinterpret_cast<void*> (&(CellLock->CL)))), (const long unsigned int)(&(CellLock->CL)));
+
+#if 0
 		threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
                                 reinterpret_cast<uintptr_t>(&(((cellptr) mynode)->seqnum)) &
                                         ~(CACHELINE_SIZE - 1)
                         )
                 );
+#endif
+		inc_comm(ProcessId, (const int) (cha_of_element(reinterpret_cast<void*> (&(((cellptr) mynode)->seqnum)))), (const long unsigned int)(&(((cellptr) mynode)->seqnum)));
                 pthread_spin_unlock(&map_spinlock);
          }
          /* lock the parent cell */
          if (Type(*qptr) == LEAF) {             /* still a "leaf"?      */
             le = (leafptr) *qptr;
             if (le->num_bodies == MAX_BODIES_PER_LEAF) {
+		//std::cerr << "before recording 4\n";
                *qptr = (nodeptr) SubdivideLeaf<is_preprocessing>(le, (cellptr) mynode, l,
                                                   ProcessId);
             }
@@ -1810,22 +1901,30 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
             }
          }
          AULOCK(CellLock->CL, ((cellptr) mynode)->seqnum % MAXLOCK);
+	  //std::cerr << "before recording 5\n";
 	 if constexpr (is_preprocessing)
          {
                 pthread_spin_lock(&map_spinlock);
 
+#if 0
                 threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
                                 reinterpret_cast<uintptr_t>(&(CellLock->CL)) &
                                         ~(CACHELINE_SIZE - 1)
                         )
                 );
+#endif
+		inc_comm(ProcessId, (const int) (cha_of_element(reinterpret_cast<void*> (&(CellLock->CL)))), (const long unsigned int)(&(CellLock->CL)));
+
+#if 0
 		threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
                                 reinterpret_cast<uintptr_t>(&(((cellptr) mynode)->seqnum)) &
                                         ~(CACHELINE_SIZE - 1)
                         )
                 );
+#endif
+		inc_comm(ProcessId, (const int) (cha_of_element(reinterpret_cast<void*> (&(((cellptr) mynode)->seqnum)))), (const long unsigned int)(&(((cellptr) mynode)->seqnum)));
                 pthread_spin_unlock(&map_spinlock);
         }
          /* unlock the node           */
@@ -1935,13 +2034,15 @@ cellptr makecell(long ProcessId)
    if constexpr (is_preprocessing)
          {
                 pthread_spin_lock(&map_spinlock);
-
+#if 0
                 threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
                                 reinterpret_cast<uintptr_t>(&(c->seqnum)) &
                                         ~(CACHELINE_SIZE - 1)
                         )
                 );
+#endif
+		inc_comm(ProcessId, (const int) (cha_of_element(reinterpret_cast<void*> (&(c->seqnum)))), (const long unsigned int)(&(c->seqnum)));
                 pthread_spin_unlock(&map_spinlock);
         } 
    Type(c) = CELL;
@@ -2024,13 +2125,15 @@ void hackcofm(long ProcessId)
 	    if constexpr (is_preprocessing)
             {
                 pthread_spin_lock(&map_spinlock);
-
+#if 0
                 threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
                                 reinterpret_cast<uintptr_t>(&(Pos(q))) &
                                         ~(CACHELINE_SIZE - 1)
                         )
                 );
+#endif
+		inc_comm(ProcessId, (const int) (cha_of_element(reinterpret_cast<void*> (&(Pos(q))))), (const long unsigned int)(&(Pos(q))));
                 pthread_spin_unlock(&map_spinlock);
            }
 
@@ -2128,6 +2231,7 @@ void stepsystem(long ProcessId)
     }
 
     /* load bodies into tree   */
+    //std::cerr << "before maketree\n";
     maketree<is_preprocessing>(ProcessId);
     if ((ProcessId == 0) && (Local[ProcessId].nstep >= 2)) {
         CLOCK(treebuildend);
@@ -2158,6 +2262,7 @@ void stepsystem(long ProcessId)
         CLOCK(forcecalcstart);
     }
 
+    //std::cerr << "before ComputeForces\n";
     ComputeForces<is_preprocessing>(ProcessId);
 
     if ((ProcessId == 0) && (Local[ProcessId].nstep >= 2)) {
@@ -2330,13 +2435,15 @@ bool subdivp(register nodeptr p, real dsq, long ProcessId)
    if constexpr (is_preprocessing)
    {
    	pthread_spin_lock(&map_spinlock);
-
+#if 0
    	threadid_addresses_map[ProcessId].insert(
         reinterpret_cast<double*>(
         	reinterpret_cast<uintptr_t>(&(Pos(p))) &
              		~(CACHELINE_SIZE - 1)
                 )
         );
+#endif
+	//inc_comm(ProcessId, (const int) (cha_of_element(reinterpret_cast<void*> (&(Pos(p))))), (const long unsigned int)(&(Pos(p))));
 	pthread_spin_unlock(&map_spinlock);
    }
    DOTVP(Local[ProcessId].drsq, Local[ProcessId].dr, Local[ProcessId].dr);
