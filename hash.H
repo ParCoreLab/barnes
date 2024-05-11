@@ -68,7 +68,7 @@ void HashTable::insertItem(long unsigned int index, long unsigned int cacheLine)
 	table[index].second.push_back({cacheLine, {0, 0}}); 
 }
 
-//#if 0
+#if 0
 bool HashTable::findItem(long unsigned int index, long unsigned int cacheLine)
 {
 	// get the hash index of key
@@ -77,6 +77,7 @@ bool HashTable::findItem(long unsigned int index, long unsigned int cacheLine)
 	auto it = table[index].second.begin();
 	while (it != table[index].second.end())
         {
+		
 		if (std::get<0>(*it) == cacheLine)
 			break;
 	}
@@ -86,14 +87,32 @@ bool HashTable::findItem(long unsigned int index, long unsigned int cacheLine)
 		return true;
 	return false;
 }
-//#endif
+#endif
+bool HashTable::findItem(long unsigned int index, long unsigned int cacheLine)
+{
+	// get the hash index of key
+	//long unsigned int index = hashFunction(cacheLine);
+
+	// find the key in (index)th list
+	std::list <std::pair<long unsigned int, std::pair<int, int>>> :: iterator i;
+	for (i = table[index].second.begin();
+			i != table[index].second.end(); i++) {
+		if (i->first == cacheLine)
+			break;
+	}
+
+	// if key is found in hash table, remove it
+	if (i != table[index].second.end())
+		return true;
+	return false;
+}
 
 void HashTable::wait(long unsigned int index)
 {
         //while(table[index].first <= 0);
 	//table[index].first--;
 	auto oldval = table[index].first.load();
-        while (oldval == 0 || !table[index].first.compare_exchange_strong(oldval, oldval - 1)) {
+        while (oldval == 0 || !table[index].first.compare_exchange_strong(oldval, 0)) {
            oldval = table[index].first.load();
 	   //std::cerr << "in wait, val: " << oldval << "\n";
 	}

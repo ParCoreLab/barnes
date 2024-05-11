@@ -238,6 +238,7 @@ void inc_comm(int tid,
 		const int& cha,
 		const long unsigned int& addr)
 {
+	assert(tid < 28);
 	//std::cerr << "here 0 2\n";
 #if 0
 	if(sampling_counter++ < next_sampling_iteration) {
@@ -341,6 +342,7 @@ void inc_comm(int tid,
 
 			break;
 	}
+	//comm_map->signal(hash_idx);
 //#endif
 }
 
@@ -1787,7 +1789,7 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
          //std::cerr << "before recording 1\n";
 	 if constexpr (is_preprocessing)
       	 { 
-        	pthread_spin_lock(&map_spinlock);
+        	//pthread_spin_lock(&map_spinlock);
 
 #if 0
         	threadid_addresses_map[ProcessId].insert(
@@ -1813,7 +1815,7 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
 		//std::cerr << "before inc_comm 2\n";
 		inc_comm(ProcessId, cha, (const long unsigned int)(&(((cellptr) mynode)->seqnum)));		
 
-                pthread_spin_unlock(&map_spinlock);
+                //pthread_spin_unlock(&map_spinlock);
       	}
          if (*qptr == NULL) {
             le = InitLeaf((cellptr) mynode, ProcessId);
@@ -1829,7 +1831,7 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
 	//std::cerr << "before recording 2\n";
 	 if constexpr (is_preprocessing)
          {
-                pthread_spin_lock(&map_spinlock);
+                //pthread_spin_lock(&map_spinlock);
 
 #if 0
                 threadid_addresses_map[ProcessId].insert(
@@ -1851,7 +1853,7 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
 #endif
 		inc_comm(ProcessId, (const int) (cha_of_element(reinterpret_cast<void*> (&(((cellptr) mynode)->seqnum)))), (const long unsigned int)(&(((cellptr) mynode)->seqnum)));
 
-                pthread_spin_unlock(&map_spinlock);
+                //pthread_spin_unlock(&map_spinlock);
         }
          /* unlock the parent cell */
       }
@@ -1861,7 +1863,7 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
 	 //std::cerr << "before recording 3\n";
 	 if constexpr (is_preprocessing)
          {
-                pthread_spin_lock(&map_spinlock);
+                //pthread_spin_lock(&map_spinlock);
 
 #if 0
                 threadid_addresses_map[ProcessId].insert(
@@ -1882,7 +1884,7 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
                 );
 #endif
 		inc_comm(ProcessId, (const int) (cha_of_element(reinterpret_cast<void*> (&(((cellptr) mynode)->seqnum)))), (const long unsigned int)(&(((cellptr) mynode)->seqnum)));
-                pthread_spin_unlock(&map_spinlock);
+                //pthread_spin_unlock(&map_spinlock);
          }
          /* lock the parent cell */
          if (Type(*qptr) == LEAF) {             /* still a "leaf"?      */
@@ -1904,7 +1906,7 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
 	  //std::cerr << "before recording 5\n";
 	 if constexpr (is_preprocessing)
          {
-                pthread_spin_lock(&map_spinlock);
+                //pthread_spin_lock(&map_spinlock);
 
 #if 0
                 threadid_addresses_map[ProcessId].insert(
@@ -1925,7 +1927,7 @@ nodeptr loadtree(bodyptr p, cellptr root, long ProcessId)
                 );
 #endif
 		inc_comm(ProcessId, (const int) (cha_of_element(reinterpret_cast<void*> (&(((cellptr) mynode)->seqnum)))), (const long unsigned int)(&(((cellptr) mynode)->seqnum)));
-                pthread_spin_unlock(&map_spinlock);
+                //pthread_spin_unlock(&map_spinlock);
         }
          /* unlock the node           */
       }
@@ -2033,7 +2035,7 @@ cellptr makecell(long ProcessId)
    c->seqnum = ProcessId*maxmycell+Mycell;
    if constexpr (is_preprocessing)
          {
-                pthread_spin_lock(&map_spinlock);
+                //pthread_spin_lock(&map_spinlock);
 #if 0
                 threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
@@ -2043,7 +2045,7 @@ cellptr makecell(long ProcessId)
                 );
 #endif
 		inc_comm(ProcessId, (const int) (cha_of_element(reinterpret_cast<void*> (&(c->seqnum)))), (const long unsigned int)(&(c->seqnum)));
-                pthread_spin_unlock(&map_spinlock);
+                //pthread_spin_unlock(&map_spinlock);
         } 
    Type(c) = CELL;
    Done(c) = FALSE;
@@ -2124,7 +2126,7 @@ void hackcofm(long ProcessId)
 
 	    if constexpr (is_preprocessing)
             {
-                pthread_spin_lock(&map_spinlock);
+                //pthread_spin_lock(&map_spinlock);
 #if 0
                 threadid_addresses_map[ProcessId].insert(
                         reinterpret_cast<double*>(
@@ -2134,7 +2136,7 @@ void hackcofm(long ProcessId)
                 );
 #endif
 		inc_comm(ProcessId, (const int) (cha_of_element(reinterpret_cast<void*> (&(Pos(q))))), (const long unsigned int)(&(Pos(q))));
-                pthread_spin_unlock(&map_spinlock);
+                //pthread_spin_unlock(&map_spinlock);
            }
 
             Done(r) = FALSE;
@@ -2434,7 +2436,7 @@ bool subdivp(register nodeptr p, real dsq, long ProcessId)
 
    if constexpr (is_preprocessing)
    {
-   	pthread_spin_lock(&map_spinlock);
+   	//pthread_spin_lock(&map_spinlock);
 #if 0
    	threadid_addresses_map[ProcessId].insert(
         reinterpret_cast<double*>(
@@ -2444,7 +2446,7 @@ bool subdivp(register nodeptr p, real dsq, long ProcessId)
         );
 #endif
 	inc_comm(ProcessId, (const int) (cha_of_element(reinterpret_cast<void*> (&(Pos(p))))), (const long unsigned int)(&(Pos(p))));
-	pthread_spin_unlock(&map_spinlock);
+	//pthread_spin_unlock(&map_spinlock);
    }
    DOTVP(Local[ProcessId].drsq, Local[ProcessId].dr, Local[ProcessId].dr);
    Local[ProcessId].pmem = p;
