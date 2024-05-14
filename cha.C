@@ -1,5 +1,5 @@
 #include "cha.h"
-
+#include "protocol.h"
 #include <fcntl.h>
 #include <unistd.h>
 #include <x86intrin.h>
