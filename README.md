@@ -1,17 +1,25 @@
-# How to prepare the CHA-aware memory manager
+## How to prepare the CHA-aware memory manager
 
-cd shm
-make
-sudo ./automate.sh
+```bash
+$ cd shm
+$ make
+$ sudo ./automate.sh
+```
 
-# How to compile
+## How to compile
 
-make
+```bash
+$ make
+```
 
-# How to run the CHA-aware BARNES on an input configuration
+## How to run the CHA-aware BARNES on an input configuration
 
-sudo ./BARNES < input
+```bash
+$ sudo ./BARNES < input
+```
 
-# How to run the experiment
+## How to run the traffic comparison experiment
 
+```bash
 sudo ./input_size_compare.sh
+```
