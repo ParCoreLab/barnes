@@ -1,3 +1,9 @@
+# How to prepare the CHA-aware memory manager
+
+cd shm
+make
+sudo ./automate.sh
+
 # How to compile
 
 make
