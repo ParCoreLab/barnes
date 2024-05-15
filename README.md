@@ -1,6 +1,6 @@
 ## Requirements
 
-* A 28-core Intel Cascade Lake machine running a Linux OS kernel
+* A 28-core per socket Intel Cascade Lake machine running a Linux OS kernel
 
 ## How to prepare the CHA-aware memory manager
 
